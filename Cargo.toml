@@ -1,0 +1,12 @@
+[package]
+name = "pygjson"
+version = "0.0.1"
+edition = "2021"
+
+[lib]
+name = "_pygjson"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.22", features = ["extension-module", "abi3-py310", "generate-import-lib"] }
+gjson = "0.8"
