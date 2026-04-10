@@ -1,15 +1,17 @@
 # pygjson
 
-PyGJSON is a Python bindings for [tidwall/gjson.rs](https://github.com/tidwall/gjson.rs).
+![PyPI - Version](https://img.shields.io/pypi/v/pygjson)
+![GitHub License](https://img.shields.io/github/license/minefuto/pygjson)
 
-The original GJSON: [https://github.com/tidwall/gjson]()
+PYGJSON is a fast JSON parser and a Python binding for [tidwall/gjson.rs](https://github.com/tidwall/gjson.rs).
+
+The original GJSON: [tidwall/gjson](https://github.com/tidwall/gjson)
 
 ## Installation
 
 ```bash
 pip install pygjson
 ```
-
 
 ## Quick example
 
