@@ -1,6 +1,7 @@
 use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList, PyTuple};
+use pyo3::types::{PyDict, PyTuple};
+use std::sync::Arc;
 
 /// Mirror of `gjson::Kind`, exposed to Python as a class with constant attributes.
 #[pyclass(module = "pygjson._pygjson", eq, eq_int)]
@@ -38,27 +39,68 @@ fn map_kind(k: gjson::Kind) -> Kind {
 
 /// A JSON value returned by `get` / `parse`.
 ///
-/// The wrapper owns the raw JSON text representing this value, so it can be
-/// passed around freely from Python without lifetime concerns. Subsequent
-/// operations re-parse the (typically tiny) raw text on demand.
+/// The wrapper holds a reference-counted handle to the raw JSON text together
+/// with the byte range that this particular value occupies inside it. Child
+/// values produced by `get`, iteration, `to_list`, etc. share the same `Arc`
+/// instead of cloning the underlying text, which avoids a fresh heap
+/// allocation per child element.
 #[pyclass(module = "pygjson._pygjson", name = "Value")]
 pub struct Value {
-    raw: String,
+    raw: Arc<str>,
+    start: usize,
+    end: usize,
     kind: Kind,
     exists: bool,
 }
 
 impl Value {
-    fn from_gjson(v: gjson::Value) -> Self {
-        Value {
-            kind: map_kind(v.kind()),
-            exists: v.exists(),
-            raw: v.json().to_string(),
-        }
+    fn raw_slice(&self) -> &str {
+        &self.raw[self.start..self.end]
     }
 
     fn parsed(&self) -> gjson::Value<'_> {
-        gjson::parse(&self.raw)
+        gjson::parse(self.raw_slice())
+    }
+
+    /// Build a `Value` that owns a fresh `Arc<str>` containing `text`.
+    fn from_owned_text(text: &str, kind: Kind, exists: bool) -> Self {
+        let raw: Arc<str> = Arc::from(text);
+        let end = raw.len();
+        Self {
+            raw,
+            start: 0,
+            end,
+            kind,
+            exists,
+        }
+    }
+
+    /// Build a child `Value` that shares the parent's `Arc<str>` whenever the
+    /// child's text is a borrowed slice of it. Falls back to a fresh
+    /// allocation for owned children (e.g. modifier output).
+    fn child(parent: &Arc<str>, child: gjson::Value<'_>) -> Self {
+        let kind = map_kind(child.kind());
+        let exists = child.exists();
+        let child_text = child.json();
+        if !child_text.is_empty() {
+            let parent_bytes = parent.as_bytes();
+            let parent_start_addr = parent_bytes.as_ptr() as usize;
+            let parent_end_addr = parent_start_addr + parent_bytes.len();
+            let child_start_addr = child_text.as_ptr() as usize;
+            if child_start_addr >= parent_start_addr
+                && child_start_addr + child_text.len() <= parent_end_addr
+            {
+                let start = child_start_addr - parent_start_addr;
+                return Self {
+                    raw: Arc::clone(parent),
+                    start,
+                    end: start + child_text.len(),
+                    kind,
+                    exists,
+                };
+            }
+        }
+        Self::from_owned_text(child_text, kind, exists)
     }
 }
 
@@ -103,20 +145,26 @@ impl Value {
 
     /// Raw JSON text for this value.
     fn json(&self) -> String {
-        self.raw.clone()
+        self.raw_slice().to_string()
     }
 
     /// Get a child value at the given gjson path.
     ///
     /// If `default` is given and the path is not found, returns `default` instead.
     #[pyo3(signature = (path, *args))]
-    fn get(&self, py: Python<'_>, path: &str, args: &Bound<'_, pyo3::types::PyTuple>) -> PyResult<PyObject> {
+    fn get(
+        &self,
+        py: Python<'_>,
+        path: &str,
+        args: &Bound<'_, pyo3::types::PyTuple>,
+    ) -> PyResult<PyObject> {
         if args.len() > 1 {
             return Err(pyo3::exceptions::PyTypeError::new_err(
                 "get() takes at most 2 positional arguments",
             ));
         }
-        let val = Value::from_gjson(self.parsed().get(path));
+        let parsed = self.parsed();
+        let val = Value::child(&self.raw, parsed.get(path));
         if !val.exists && !args.is_empty() {
             return Ok(args.get_item(0)?.into_py(py));
         }
@@ -126,8 +174,9 @@ impl Value {
     /// Return the value as a list of `Value` objects (empty for non-arrays).
     fn to_list(&self) -> Vec<Value> {
         let mut out = Vec::new();
-        self.parsed().each(|_k, v| {
-            out.push(Value::from_gjson(v));
+        let parsed = self.parsed();
+        parsed.each(|_k, v| {
+            out.push(Value::child(&self.raw, v));
             true
         });
         out
@@ -136,13 +185,14 @@ impl Value {
     /// Return the value as a `dict[str, Value]` (empty for non-objects).
     fn to_dict<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         let dict = PyDict::new_bound(py);
-        let parsed = self.parsed();
         // Only iterate as a map for objects; arrays would yield empty keys.
         if matches!(self.kind, Kind::Object) {
+            let parsed = self.parsed();
             let mut err: Option<PyErr> = None;
             parsed.each(|k, v| {
                 let key = k.str().to_string();
-                match dict.set_item(key, Value::from_gjson(v).into_py(py)) {
+                let child = Value::child(&self.raw, v);
+                match dict.set_item(key, child.into_py(py)) {
                     Ok(()) => true,
                     Err(e) => {
                         err = Some(e);
@@ -211,33 +261,21 @@ impl Value {
     }
 
     /// Iterate: String → chars, Array → Values, Object → keys.
-    fn __iter__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let list = PyList::empty_bound(py);
-        match self.kind {
-            Kind::String => {
-                for ch in self.parsed().str().chars() {
-                    let _ = list.append(ch.to_string().into_py(py));
-                }
-            }
-            Kind::Array => {
-                self.parsed().each(|_k, v| {
-                    let _ = list.append(Value::from_gjson(v).into_py(py));
-                    true
-                });
-            }
-            Kind::Object => {
-                self.parsed().each(|k, _v| {
-                    let _ = list.append(k.str().to_string().into_py(py));
-                    true
-                });
-            }
+    ///
+    /// Returns a lazy `ValueIterator` so the elements are produced one at a
+    /// time and only one Python wrapper is alive at any moment.
+    fn __iter__(&self, py: Python<'_>) -> PyResult<Py<ValueIterator>> {
+        let it = match self.kind {
+            Kind::String => ValueIterator::for_string_chars(self),
+            Kind::Array => ValueIterator::for_array_values(self),
+            Kind::Object => ValueIterator::for_object_keys(self),
             _ => {
                 return Err(PyTypeError::new_err(
                     "Value is not iterable (only String, Array, and Object are iterable)",
                 ));
             }
-        }
-        list.call_method0("__iter__")
+        };
+        Py::new(py, it)
     }
 
     /// Subscript access for Object values (enables the `dict()` mapping protocol).
@@ -247,63 +285,59 @@ impl Value {
                 "subscript access is only supported for Object values",
             ));
         }
-        Ok(Value::from_gjson(self.parsed().get(key)))
+        Ok(Value::child(&self.raw, self.parsed().get(key)))
     }
 
-    /// Return the object's keys as a list (enables `dict()` mapping protocol).
+    /// Return a lazy view of the object's keys (similar to `dict.keys()`).
     /// Raises `TypeError` for non-Object values.
-    fn keys(&self) -> PyResult<Vec<String>> {
-        if !matches!(self.kind, Kind::Object) {
+    fn keys(slf: PyRef<'_, Self>, py: Python<'_>) -> PyResult<Py<KeysView>> {
+        if !matches!(slf.kind, Kind::Object) {
             return Err(PyTypeError::new_err(
                 "keys() is only available for Object values",
             ));
         }
-        let mut out = Vec::new();
-        self.parsed().each(|k, _v| {
-            out.push(k.str().to_string());
-            true
-        });
-        Ok(out)
+        Py::new(
+            py,
+            KeysView {
+                value: slf.into(),
+            },
+        )
     }
 
-    /// Return the object's values as a list.
+    /// Return a lazy view of the object's values (similar to `dict.values()`).
     /// Raises `TypeError` for non-Object values.
-    fn values(&self) -> PyResult<Vec<Value>> {
-        if !matches!(self.kind, Kind::Object) {
+    fn values(slf: PyRef<'_, Self>, py: Python<'_>) -> PyResult<Py<ValuesView>> {
+        if !matches!(slf.kind, Kind::Object) {
             return Err(PyTypeError::new_err(
                 "values() is only available for Object values",
             ));
         }
-        let mut out = Vec::new();
-        self.parsed().each(|_k, v| {
-            out.push(Value::from_gjson(v));
-            true
-        });
-        Ok(out)
+        Py::new(
+            py,
+            ValuesView {
+                value: slf.into(),
+            },
+        )
     }
 
-    /// Return the object's (key, value) pairs as a list of tuples.
+    /// Return a lazy view of the object's `(key, value)` pairs.
     /// Raises `TypeError` for non-Object values.
-    fn items<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
-        if !matches!(self.kind, Kind::Object) {
+    fn items(slf: PyRef<'_, Self>, py: Python<'_>) -> PyResult<Py<ItemsView>> {
+        if !matches!(slf.kind, Kind::Object) {
             return Err(PyTypeError::new_err(
                 "items() is only available for Object values",
             ));
         }
-        let list = PyList::empty_bound(py);
-        self.parsed().each(|k, v| {
-            let tup = PyTuple::new_bound(
-                py,
-                &[k.str().to_string().into_py(py), Value::from_gjson(v).into_py(py)],
-            );
-            let _ = list.append(tup);
-            true
-        });
-        Ok(list)
+        Py::new(
+            py,
+            ItemsView {
+                value: slf.into(),
+            },
+        )
     }
 
     fn __int__(&self, py: Python<'_>) -> PyObject {
-        if self.raw.starts_with('-') {
+        if self.raw_slice().starts_with('-') {
             self.parsed().i64().into_py(py)
         } else {
             self.parsed().u64().into_py(py)
@@ -319,7 +353,7 @@ impl Value {
     }
 
     fn __repr__(&self) -> String {
-        format!("Value({})", self.raw)
+        format!("Value({})", self.raw_slice())
     }
 
     fn __str__(&self) -> String {
@@ -327,16 +361,283 @@ impl Value {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Lazy iterator and view types
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Copy)]
+enum IterMode {
+    /// Yield successive `str` items from `strings`.
+    Strings,
+    /// Yield successive `Value` items from `children`.
+    Values,
+    /// Yield `(key, value)` tuples from `strings` and `children` in lockstep.
+    Items,
+}
+
+/// Lazy iterator over an Array, Object or String value.
+///
+/// The constructor walks the underlying gjson value once and records either
+/// child `Value` handles (which share the parent's `Arc<str>`) or pre-computed
+/// strings (for keys / chars). `__next__` then yields one Python object at a
+/// time, so the peak number of simultaneously-live Python wrappers is one
+/// regardless of the collection size.
+#[pyclass(module = "pygjson._pygjson")]
+pub struct ValueIterator {
+    children: Vec<Value>,
+    strings: Vec<Box<str>>,
+    cursor: usize,
+    mode: IterMode,
+}
+
+impl ValueIterator {
+    fn for_array_values(value: &Value) -> Self {
+        let mut children: Vec<Value> = Vec::new();
+        let parsed = gjson::parse(value.raw_slice());
+        parsed.each(|_k, v| {
+            children.push(Value::child(&value.raw, v));
+            true
+        });
+        Self {
+            children,
+            strings: Vec::new(),
+            cursor: 0,
+            mode: IterMode::Values,
+        }
+    }
+
+    fn for_object_keys(value: &Value) -> Self {
+        let mut strings: Vec<Box<str>> = Vec::new();
+        let parsed = gjson::parse(value.raw_slice());
+        parsed.each(|k, _v| {
+            strings.push(k.str().to_string().into_boxed_str());
+            true
+        });
+        Self {
+            children: Vec::new(),
+            strings,
+            cursor: 0,
+            mode: IterMode::Strings,
+        }
+    }
+
+    fn for_object_values(value: &Value) -> Self {
+        // Same shape as `for_array_values`, kept as a separate constructor so
+        // that the call sites read clearly.
+        Self::for_array_values(value)
+    }
+
+    fn for_object_items(value: &Value) -> Self {
+        let mut children: Vec<Value> = Vec::new();
+        let mut strings: Vec<Box<str>> = Vec::new();
+        let parsed = gjson::parse(value.raw_slice());
+        parsed.each(|k, v| {
+            strings.push(k.str().to_string().into_boxed_str());
+            children.push(Value::child(&value.raw, v));
+            true
+        });
+        Self {
+            children,
+            strings,
+            cursor: 0,
+            mode: IterMode::Items,
+        }
+    }
+
+    fn for_string_chars(value: &Value) -> Self {
+        let s = value.parsed().str().to_string();
+        let strings: Vec<Box<str>> = s
+            .chars()
+            .map(|c| c.to_string().into_boxed_str())
+            .collect();
+        Self {
+            children: Vec::new(),
+            strings,
+            cursor: 0,
+            mode: IterMode::Strings,
+        }
+    }
+}
+
+#[pymethods]
+impl ValueIterator {
+    fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    fn __next__(&mut self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        let i = self.cursor;
+        match self.mode {
+            IterMode::Strings => {
+                if i >= self.strings.len() {
+                    return Ok(None);
+                }
+                self.cursor += 1;
+                Ok(Some(self.strings[i].as_ref().to_string().into_py(py)))
+            }
+            IterMode::Values => {
+                if i >= self.children.len() {
+                    return Ok(None);
+                }
+                self.cursor += 1;
+                let v = &self.children[i];
+                let cloned = Value {
+                    raw: Arc::clone(&v.raw),
+                    start: v.start,
+                    end: v.end,
+                    kind: v.kind,
+                    exists: v.exists,
+                };
+                Ok(Some(Py::new(py, cloned)?.into_py(py)))
+            }
+            IterMode::Items => {
+                if i >= self.children.len() {
+                    return Ok(None);
+                }
+                self.cursor += 1;
+                let v = &self.children[i];
+                let cloned = Value {
+                    raw: Arc::clone(&v.raw),
+                    start: v.start,
+                    end: v.end,
+                    kind: v.kind,
+                    exists: v.exists,
+                };
+                let key_obj = self.strings[i].as_ref().to_string().into_py(py);
+                let val_obj = Py::new(py, cloned)?.into_py(py);
+                let tup = PyTuple::new_bound(py, &[key_obj, val_obj]);
+                Ok(Some(tup.into_py(py)))
+            }
+        }
+    }
+
+    fn __length_hint__(&self) -> usize {
+        match self.mode {
+            IterMode::Strings => self.strings.len().saturating_sub(self.cursor),
+            IterMode::Values | IterMode::Items => {
+                self.children.len().saturating_sub(self.cursor)
+            }
+        }
+    }
+}
+
+/// Lightweight view returned by `Value.keys()`. Iteration constructs a
+/// `ValueIterator` lazily so the keys are only collected when actually used.
+#[pyclass(module = "pygjson._pygjson")]
+pub struct KeysView {
+    value: Py<Value>,
+}
+
+#[pymethods]
+impl KeysView {
+    fn __iter__(&self, py: Python<'_>) -> PyResult<Py<ValueIterator>> {
+        let v = self.value.borrow(py);
+        Py::new(py, ValueIterator::for_object_keys(&v))
+    }
+
+    fn __len__(&self, py: Python<'_>) -> PyResult<usize> {
+        self.value.borrow(py).__len__()
+    }
+
+    fn __contains__(&self, py: Python<'_>, item: &str) -> bool {
+        let v = self.value.borrow(py);
+        let mut found = false;
+        v.parsed().each(|k, _vv| {
+            if k.str() == item {
+                found = true;
+                false
+            } else {
+                true
+            }
+        });
+        found
+    }
+
+    fn __repr__(&self, py: Python<'_>) -> String {
+        let v = self.value.borrow(py);
+        let mut parts: Vec<String> = Vec::new();
+        v.parsed().each(|k, _vv| {
+            parts.push(format!("{:?}", k.str()));
+            true
+        });
+        format!("KeysView([{}])", parts.join(", "))
+    }
+}
+
+/// Lightweight view returned by `Value.values()`.
+#[pyclass(module = "pygjson._pygjson")]
+pub struct ValuesView {
+    value: Py<Value>,
+}
+
+#[pymethods]
+impl ValuesView {
+    fn __iter__(&self, py: Python<'_>) -> PyResult<Py<ValueIterator>> {
+        let v = self.value.borrow(py);
+        Py::new(py, ValueIterator::for_object_values(&v))
+    }
+
+    fn __len__(&self, py: Python<'_>) -> PyResult<usize> {
+        self.value.borrow(py).__len__()
+    }
+
+    fn __repr__(&self, py: Python<'_>) -> String {
+        let v = self.value.borrow(py);
+        let mut parts: Vec<String> = Vec::new();
+        v.parsed().each(|_k, vv| {
+            parts.push(format!("Value({})", vv.json()));
+            true
+        });
+        format!("ValuesView([{}])", parts.join(", "))
+    }
+}
+
+/// Lightweight view returned by `Value.items()`.
+#[pyclass(module = "pygjson._pygjson")]
+pub struct ItemsView {
+    value: Py<Value>,
+}
+
+#[pymethods]
+impl ItemsView {
+    fn __iter__(&self, py: Python<'_>) -> PyResult<Py<ValueIterator>> {
+        let v = self.value.borrow(py);
+        Py::new(py, ValueIterator::for_object_items(&v))
+    }
+
+    fn __len__(&self, py: Python<'_>) -> PyResult<usize> {
+        self.value.borrow(py).__len__()
+    }
+
+    fn __repr__(&self, py: Python<'_>) -> String {
+        let v = self.value.borrow(py);
+        let mut parts: Vec<String> = Vec::new();
+        v.parsed().each(|k, vv| {
+            parts.push(format!("({:?}, Value({}))", k.str(), vv.json()));
+            true
+        });
+        format!("ItemsView([{}])", parts.join(", "))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Module-level helpers
+// ---------------------------------------------------------------------------
+
 /// Get the value at `path` from the given JSON document.
 #[pyfunction]
 fn get(json: &str, path: &str) -> Value {
-    Value::from_gjson(gjson::get(json, path))
+    let raw: Arc<str> = Arc::from(json);
+    let parsed = gjson::get(&raw, path);
+    Value::child(&raw, parsed)
 }
 
 /// Parse the entire JSON document into a `Value`.
 #[pyfunction]
 fn parse(json: &str) -> Value {
-    Value::from_gjson(gjson::parse(json))
+    let raw: Arc<str> = Arc::from(json);
+    let parsed = gjson::parse(&raw);
+    Value::child(&raw, parsed)
 }
 
 /// Validate whether `json` is a syntactically valid JSON document.
@@ -349,6 +650,10 @@ fn valid(json: &str) -> bool {
 fn _pygjson(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Kind>()?;
     m.add_class::<Value>()?;
+    m.add_class::<ValueIterator>()?;
+    m.add_class::<KeysView>()?;
+    m.add_class::<ValuesView>()?;
+    m.add_class::<ItemsView>()?;
     m.add_function(wrap_pyfunction!(get, m)?)?;
     m.add_function(wrap_pyfunction!(parse, m)?)?;
     m.add_function(wrap_pyfunction!(valid, m)?)?;

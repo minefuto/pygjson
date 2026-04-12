@@ -3,7 +3,7 @@
 ![PyPI - Version](https://img.shields.io/pypi/v/pygjson)
 ![GitHub License](https://img.shields.io/github/license/minefuto/pygjson)
 
-PYGJSON is a fast JSON parser and a Python binding for [tidwall/gjson.rs](https://github.com/tidwall/gjson.rs).
+PYGJSON is a Python binding for [tidwall/gjson.rs](https://github.com/tidwall/gjson.rs) - fast JSON path queries.
 
 The original GJSON: [tidwall/gjson](https://github.com/tidwall/gjson)
 
@@ -84,10 +84,34 @@ pygjson.valid(JSON)  # True
 | `len(v)`            | Chars for String; element count for Array/Object             |
 | `v[key]`            | Subscript access for Object values                           |
 | `key in v`          | Key membership for Object; str match for Array elements      |
-| `iter(v)`           | Chars for String; `Value`s for Array; keys for Object        |
-| `v.keys()`          | Object keys (raises `TypeError` for non-Object)              |
-| `v.values()`        | Object values (raises `TypeError` for non-Object)            |
-| `v.items()`         | `(key, Value)` pairs (raises `TypeError` for non-Object)     |
+| `iter(v)`           | Lazy iterator: chars for String; `Value`s for Array; keys for Object |
+| `v.keys()`          | Lazy `KeysView` of object keys (raises `TypeError` for non-Object)   |
+| `v.values()`        | Lazy `ValuesView` of object values (raises `TypeError` for non-Object) |
+| `v.items()`         | Lazy `ItemsView` of `(key, Value)` pairs (raises `TypeError` for non-Object) |
+
+#### Lazy iteration
+
+`iter(v)`, `v.keys()`, `v.values()` and `v.items()` all return lightweight
+lazy objects rather than fully-materialised lists, mirroring Python's built-in
+`dict_keys` / `dict_values` / `dict_items`. Only one child wrapper is alive at
+any time, so iterating a large array or object never pays the cost of
+allocating one Python object per element up front.
+
+```python
+v = parse('{"a": 1, "b": 2, "c": 3}')
+
+ks = v.keys()           # KeysView(["a", "b", "c"]) — no materialisation yet
+len(ks)                 # 3
+"a" in ks               # True
+list(ks)                # ['a', 'b', 'c']
+
+for k, child in v.items():   # ItemsView, lazily yields one pair at a time
+    ...
+```
+
+If you need a fully materialised collection (for example to keep references
+to every child), call `v.to_list()` / `v.to_dict()` or wrap the view with
+`list(...)` / `dict(...)` explicitly.
 
 ### Kind
 

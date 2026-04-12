@@ -97,9 +97,45 @@ def test_dict_non_object_raises():
 
 def test_keys_values_items():
     name = get(JSON, "name")
-    assert name.keys() == ["first", "last"]
+    assert list(name.keys()) == ["first", "last"]
     assert [str(v) for v in name.values()] == ["Tom", "Anderson"]
     assert [(k, str(v)) for k, v in name.items()] == [("first", "Tom"), ("last", "Anderson")]
+
+
+def test_views_are_lazy_and_support_protocol():
+    # keys() / values() / items() should now return view objects (similar to
+    # dict.keys()) rather than fully-materialised lists. They support len(),
+    # iteration, and (for keys) membership tests.
+    name = get(JSON, "name")
+
+    kv = name.keys()
+    assert len(kv) == 2
+    assert "first" in kv
+    assert "missing" not in kv
+    assert list(kv) == ["first", "last"]
+    # The view is re-iterable.
+    assert list(kv) == ["first", "last"]
+
+    vv = name.values()
+    assert len(vv) == 2
+    assert [str(v) for v in vv] == ["Tom", "Anderson"]
+
+    iv = name.items()
+    assert len(iv) == 2
+    assert [(k, str(v)) for k, v in iv] == [("first", "Tom"), ("last", "Anderson")]
+
+
+def test_iter_yields_one_at_a_time():
+    # ``iter()`` returns a custom iterator object so that callers can pull
+    # one element at a time without paying for materialising the rest.
+    children = get(JSON, "children")
+    it = iter(children)
+    assert str(next(it)) == "Sara"
+    assert str(next(it)) == "Alex"
+    assert str(next(it)) == "Jack"
+    import pytest
+    with pytest.raises(StopIteration):
+        next(it)
 
 
 def test_keys_values_items_non_object_raises():

@@ -4,6 +4,39 @@ from typing import Dict, Iterator, List, Tuple, TypeVar, Union, overload
 
 T = TypeVar("T")
 
+class ValueIterator:
+    """Lazy iterator over a :class:`Value`'s children.
+
+    Yields one element at a time so that only a single child Python object is
+    alive at any moment regardless of the underlying collection size.
+    """
+
+    def __iter__(self) -> "ValueIterator": ...
+    def __next__(self) -> Union[str, "Value", Tuple[str, "Value"]]: ...
+    def __length_hint__(self) -> int: ...
+
+class KeysView:
+    """Lazy view of an Object value's keys (similar to ``dict.keys()``)."""
+
+    def __iter__(self) -> Iterator[str]: ...
+    def __len__(self) -> int: ...
+    def __contains__(self, item: str) -> bool: ...
+    def __repr__(self) -> str: ...
+
+class ValuesView:
+    """Lazy view of an Object value's values (similar to ``dict.values()``)."""
+
+    def __iter__(self) -> Iterator["Value"]: ...
+    def __len__(self) -> int: ...
+    def __repr__(self) -> str: ...
+
+class ItemsView:
+    """Lazy view of an Object value's ``(key, value)`` pairs."""
+
+    def __iter__(self) -> Iterator[Tuple[str, "Value"]]: ...
+    def __len__(self) -> int: ...
+    def __repr__(self) -> str: ...
+
 class Kind:
     """Mirror of ``gjson::Kind``.
 
@@ -67,14 +100,26 @@ class Value:
     def to_dict(self) -> Dict[str, "Value"]:
         """Return the value as a ``dict[str, Value]``."""
 
-    def keys(self) -> List[str]:
-        """Return the object's keys. Raises ``TypeError`` for non-Object values."""
+    def keys(self) -> KeysView:
+        """Return a lazy view of the object's keys.
 
-    def values(self) -> List["Value"]:
-        """Return the object's values. Raises ``TypeError`` for non-Object values."""
+        The returned :class:`KeysView` only walks the underlying JSON when it
+        is iterated, supports ``len()``/``in``, and never materialises a list
+        unless the caller explicitly does so (e.g. ``list(value.keys())``).
+        Raises ``TypeError`` for non-Object values.
+        """
 
-    def items(self) -> List[Tuple[str, "Value"]]:
-        """Return ``(key, value)`` pairs. Raises ``TypeError`` for non-Object values."""
+    def values(self) -> ValuesView:
+        """Return a lazy view of the object's values.
+
+        Raises ``TypeError`` for non-Object values.
+        """
+
+    def items(self) -> ItemsView:
+        """Return a lazy view of the object's ``(key, value)`` pairs.
+
+        Raises ``TypeError`` for non-Object values.
+        """
 
     def __contains__(self, item: str) -> bool: ...
     def __len__(self) -> int: ...
