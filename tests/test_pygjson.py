@@ -196,24 +196,24 @@ def test_module_exports():
 
 
 def test_get_default_module_level():
-    # default なし: gjson 本来の動作 (exists=False の Value が返る)
+    # No default: standard gjson behavior
     missing = get(JSON, "no.such.path")
     assert isinstance(missing, Value)
     assert not missing.exists()
 
-    # default=None: None が返る
+    # default=None
     assert get(JSON, "no.such.path", None) is None
 
-    # 任意の値をデフォルトにできる
+    # Any arbitrary value can be used as a default
     assert get(JSON, "no.such.path", 42) == 42
     assert get(JSON, "no.such.path", "fallback") == "fallback"
 
-    # 見つかった場合は default を無視して Value が返る
+    # Default is ignored if the path is found
     result = get(JSON, "age", None)
     assert isinstance(result, Value)
     assert int(result) == 37
 
-    # JSON null は exists=True なので default は使われない
+    # Since JSON null implies exists=True, the default is not used
     null_result = get('{"key": null}', "key", "fallback")
     assert isinstance(null_result, Value)
     assert null_result.exists()
@@ -222,7 +222,7 @@ def test_get_default_module_level():
 def test_get_default_value_method():
     root = parse(JSON)
 
-    # default なし: gjson 本来の動作
+    # No default: standard gjson behavior
     missing = root.get("no.such.path")
     assert isinstance(missing, Value)
     assert not missing.exists()
@@ -230,15 +230,15 @@ def test_get_default_value_method():
     # default=None
     assert root.get("no.such.path", None) is None
 
-    # 任意の値をデフォルトにできる
+    # Any arbitrary value can be used as a default
     assert root.get("no.such.path", 99) == 99
 
-    # 見つかった場合は default を無視
+    # Default is ignored if the path is found
     result = root.get("age", None)
     assert isinstance(result, Value)
     assert int(result) == 37
 
-    # JSON null は exists=True なので default は使われない
+    # Since JSON null implies exists=True, the default is not used
     null_root = parse('{"key": null}')
     null_result = null_root.get("key", "fallback")
     assert isinstance(null_result, Value)
