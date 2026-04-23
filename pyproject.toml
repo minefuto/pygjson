@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "pygjson"
-version = "0.0.2"
+version = "0.0.3"
 description = "Python bindings for gjson.rs - fast JSON path queries"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
