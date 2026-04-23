@@ -4,7 +4,7 @@ use pyo3::types::{PyDict, PyTuple};
 use std::sync::Arc;
 
 /// Mirror of `gjson::Kind`, exposed to Python as a class with constant attributes.
-#[pyclass(module = "pygjson._pygjson", eq, eq_int)]
+#[pyclass(module = "pygjson._pygjson", eq, eq_int, skip_from_py_object)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
     Null,
@@ -123,13 +123,13 @@ impl Value {
     }
 
     /// Signed integer value (`i64`).
-    fn to_int(&self, py: Python<'_>) -> PyObject {
-        self.parsed().i64().into_py(py)
+    fn to_int(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        Ok(self.parsed().i64().into_pyobject(py)?.into_any().unbind())
     }
 
     /// Unsigned integer value (`u64`).
-    fn to_uint(&self, py: Python<'_>) -> PyObject {
-        self.parsed().u64().into_py(py)
+    fn to_uint(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        Ok(self.parsed().u64().into_pyobject(py)?.into_any().unbind())
     }
 
     /// Floating point value.
@@ -157,7 +157,7 @@ impl Value {
         py: Python<'_>,
         path: &str,
         args: &Bound<'_, pyo3::types::PyTuple>,
-    ) -> PyResult<PyObject> {
+    ) -> PyResult<Py<PyAny>> {
         if args.len() > 1 {
             return Err(pyo3::exceptions::PyTypeError::new_err(
                 "get() takes at most 2 positional arguments",
@@ -166,9 +166,9 @@ impl Value {
         let parsed = self.parsed();
         let val = Value::child(&self.raw, parsed.get(path));
         if !val.exists && !args.is_empty() {
-            return Ok(args.get_item(0)?.into_py(py));
+            return Ok(args.get_item(0)?.unbind());
         }
-        Ok(val.into_py(py))
+        Ok(Py::new(py, val)?.into_any())
     }
 
     /// Return the value as a list of `Value` objects (empty for non-arrays).
@@ -184,7 +184,7 @@ impl Value {
 
     /// Return the value as a `dict[str, Value]` (empty for non-objects).
     fn to_dict<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
-        let dict = PyDict::new_bound(py);
+        let dict = PyDict::new(py);
         // Only iterate as a map for objects; arrays would yield empty keys.
         if matches!(self.kind, Kind::Object) {
             let parsed = self.parsed();
@@ -192,7 +192,7 @@ impl Value {
             parsed.each(|k, v| {
                 let key = k.str().to_string();
                 let child = Value::child(&self.raw, v);
-                match dict.set_item(key, child.into_py(py)) {
+                match dict.set_item(key, child) {
                     Ok(()) => true,
                     Err(e) => {
                         err = Some(e);
@@ -336,11 +336,11 @@ impl Value {
         )
     }
 
-    fn __int__(&self, py: Python<'_>) -> PyObject {
+    fn __int__(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         if self.raw_slice().starts_with('-') {
-            self.parsed().i64().into_py(py)
+            Ok(self.parsed().i64().into_pyobject(py)?.into_any().unbind())
         } else {
-            self.parsed().u64().into_py(py)
+            Ok(self.parsed().u64().into_pyobject(py)?.into_any().unbind())
         }
     }
 
@@ -465,7 +465,7 @@ impl ValueIterator {
         slf
     }
 
-    fn __next__(&mut self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+    fn __next__(&mut self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
         let i = self.cursor;
         match self.mode {
             IterMode::Strings => {
@@ -473,7 +473,7 @@ impl ValueIterator {
                     return Ok(None);
                 }
                 self.cursor += 1;
-                Ok(Some(self.strings[i].as_ref().to_string().into_py(py)))
+                Ok(Some(self.strings[i].as_ref().into_pyobject(py)?.into_any().unbind()))
             }
             IterMode::Values => {
                 if i >= self.children.len() {
@@ -488,7 +488,7 @@ impl ValueIterator {
                     kind: v.kind,
                     exists: v.exists,
                 };
-                Ok(Some(Py::new(py, cloned)?.into_py(py)))
+                Ok(Some(Py::new(py, cloned)?.into_any()))
             }
             IterMode::Items => {
                 if i >= self.children.len() {
@@ -503,10 +503,10 @@ impl ValueIterator {
                     kind: v.kind,
                     exists: v.exists,
                 };
-                let key_obj = self.strings[i].as_ref().to_string().into_py(py);
-                let val_obj = Py::new(py, cloned)?.into_py(py);
-                let tup = PyTuple::new_bound(py, &[key_obj, val_obj]);
-                Ok(Some(tup.into_py(py)))
+                let key_obj = self.strings[i].as_ref().into_pyobject(py)?;
+                let val_obj = Py::new(py, cloned)?.into_bound(py).into_any();
+                let tup = PyTuple::new(py, [key_obj.into_any(), val_obj])?;
+                Ok(Some(tup.into_any().unbind()))
             }
         }
     }
