@@ -1,6 +1,6 @@
 """Type stubs for the pygjson native extension module."""
 
-from typing import Dict, Iterator, List, Tuple, TypeVar, Union, overload
+from typing import Dict, Iterator, List, Sequence, Tuple, TypeVar, Union, overload
 
 T = TypeVar("T")
 
@@ -94,6 +94,17 @@ class Value:
         instead of a ``Value`` with ``exists=False``.
         """
 
+    @overload
+    def get_many(self, paths: Sequence[str]) -> List["Value"]: ...
+    @overload
+    def get_many(self, paths: Sequence[str], default: T) -> List[Union["Value", T]]: ...
+    def get_many(self, paths: Sequence[str], default: object = ...) -> object:
+        """Get child values at each of the given gjson paths.
+
+        If ``default`` is given, any path that is not found returns ``default``
+        instead of a ``Value`` with ``exists=False``.
+        """
+
     def to_list(self) -> List["Value"]:
         """Return the value as a list of :class:`Value` objects."""
 
@@ -139,6 +150,17 @@ def get(json: str, path: str, default: object = ...) -> object:
     """Get the value at ``path`` from the given JSON document.
 
     If ``default`` is given and the path is not found, returns ``default``
+    instead of a ``Value`` with ``exists=False``.
+    """
+
+@overload
+def get_many(json: str, paths: Sequence[str]) -> List[Value]: ...
+@overload
+def get_many(json: str, paths: Sequence[str], default: T) -> List[Union[Value, T]]: ...
+def get_many(json: str, paths: Sequence[str], default: object = ...) -> object:
+    """Get the values at each path in ``paths`` from the given JSON document.
+
+    If ``default`` is given, any path that is not found returns ``default``
     instead of a ``Value`` with ``exists=False``.
     """
 

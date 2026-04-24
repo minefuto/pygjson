@@ -9,4 +9,4 @@ crate-type = ["cdylib"]
 
 [dependencies]
 pyo3 = { version = "0.28.3", features = ["extension-module", "abi3-py310", "generate-import-lib"] }
-gjson = "0.8"
+gjson = { git = "https://github.com/minefuto/gjson.rs", branch = "claude/add-get-many-function-LUHtX" }

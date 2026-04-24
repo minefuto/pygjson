@@ -1,5 +1,5 @@
 import pygjson
-from pygjson import Kind, Value, get, parse, valid
+from pygjson import Kind, Value, get, get_many, parse, valid
 
 JSON = """{
   "name": {"first": "Tom", "last": "Anderson"},
@@ -309,3 +309,71 @@ def test_contains_non_collection_raises():
         _ = "x" in get(JSON, "age")
     with pytest.raises(TypeError):
         _ = "x" in get(JSON, "name.first")
+
+
+def test_get_many_module_level_basic():
+    results = get_many(JSON, ["name.first", "age", "children.1"])
+    assert len(results) == 3
+    assert str(results[0]) == "Tom"
+    assert int(results[1]) == 37
+    assert str(results[2]) == "Alex"
+
+
+def test_get_many_missing_no_default():
+    results = get_many(JSON, ["name.first", "no.such.path"])
+    assert len(results) == 2
+    assert str(results[0]) == "Tom"
+    assert isinstance(results[1], Value)
+    assert not results[1].exists()
+
+
+def test_get_many_missing_with_default_none():
+    results = get_many(JSON, ["name.first", "no.such.path"], default=None)
+    assert str(results[0]) == "Tom"
+    assert results[1] is None
+
+
+def test_get_many_missing_with_default_value():
+    results = get_many(JSON, ["name.first", "no.such.path"], default=42)
+    assert str(results[0]) == "Tom"
+    assert results[1] == 42
+
+
+def test_get_many_empty_paths():
+    results = get_many(JSON, [])
+    assert results == []
+
+
+def test_get_many_value_method():
+    root = parse(JSON)
+    results = root.get_many(["name.first", "name.last"])
+    assert len(results) == 2
+    assert str(results[0]) == "Tom"
+    assert str(results[1]) == "Anderson"
+
+
+def test_get_many_value_method_missing_no_default():
+    root = parse(JSON)
+    results = root.get_many(["name.first", "no.such.path"])
+    assert len(results) == 2
+    assert str(results[0]) == "Tom"
+    assert isinstance(results[1], Value)
+    assert not results[1].exists()
+
+
+def test_get_many_value_method_missing_with_default_none():
+    root = parse(JSON)
+    results = root.get_many(["name.first", "no.such.path"], None)
+    assert str(results[0]) == "Tom"
+    assert results[1] is None
+
+
+def test_get_many_value_method_missing_with_default_value():
+    root = parse(JSON)
+    results = root.get_many(["name.first", "no.such.path"], 42)
+    assert str(results[0]) == "Tom"
+    assert results[1] == 42
+
+
+def test_get_many_module_export():
+    assert pygjson.get_many is get_many

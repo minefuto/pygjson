@@ -45,12 +45,14 @@ pygjson.valid(JSON)  # True
 
 ### Module-level functions
 
-| Function                       | Description                                                  |
-|-------------------------------|--------------------------------------------------------------|
-| `get(json, path)`             | Query `json` at `path`; returns `Value` (gjson-native)       |
-| `get(json, path, default)`    | Returns `default` if path is not found (Pythonic)            |
-| `parse(json)`                 | Parse the entire JSON document into a `Value`                |
-| `valid(json)`                 | `True` if `json` is syntactically valid                      |
+| Function                          | Description                                                            |
+|----------------------------------|------------------------------------------------------------------------|
+| `get(json, path)`                | Query `json` at `path`; returns `Value`                                |
+| `get(json, path, default)`       | Returns `default` if path is not found                                 |
+| `get_many(json, paths)`          | Query `json` at each path; returns `list[Value]`                       |
+| `get_many(json, paths, default)` | Like `get_many` but replaces missing values with `default`             |
+| `parse(json)`                    | Parse the entire JSON document into a `Value`                          |
+| `valid(json)`                    | `True` if `json` is syntactically valid                                |
 
 ### Value
 
@@ -68,10 +70,12 @@ pygjson.valid(JSON)  # True
 | `v.to_float()`     | 64-bit float                                             |
 | `v.to_bool()`      | `True` only for the JSON literal `true`                  |
 | `v.json()`         | Raw JSON text for this value                             |
-| `v.get(path)`      | Sub-query relative to this value (gjson-native)          |
-| `v.get(path, default)` | Sub-query; returns `default` if not found (Pythonic) |
-| `v.to_list()`      | `list[Value]` for arrays                                 |
-| `v.to_dict()`      | `dict[str, Value]` for objects                           |
+| `v.get(path)`             | Sub-query relative to this value               |
+| `v.get(path, default)`    | Sub-query; returns `default` if not found          |
+| `v.get_many(paths)`       | Sub-query at multiple paths; returns `list[Value]`            |
+| `v.get_many(paths, default)`       | Sub-query at multiple paths; returns `list[Value]` but replaces missing values with `default`     |
+| `v.to_list()`             | `list[Value]` for arrays                                      |
+| `v.to_dict()`             | `dict[str, Value]` for objects                                |
 
 **Pythonic methods** — follow standard Python protocols:
 
@@ -164,6 +168,22 @@ for k, v in name.items():
 
 # Chained queries
 parse(JSON).get("name").get("first")   # Value("Tom")
+
+# Fetch multiple paths in one call
+pygjson.get_many(JSON, ["name.first", "age", "children.1"])
+# [Value(Tom), Value(37), Value(Alex)]
+
+# Missing paths return Value(exists=False) without a default …
+pygjson.get_many(JSON, ["name.first", "no.such.path"])
+# [Value(Tom), Value()]
+
+# … or your chosen default when one is provided
+pygjson.get_many(JSON, ["name.first", "no.such.path"], default=None)
+# [Value(Tom), None]
+
+# Value.get_many for sub-queries relative to a parsed document
+parse(JSON).get_many(["name.first", "name.last"])
+# [Value(Tom), Value(Anderson)]
 ```
 
 ## Path syntax

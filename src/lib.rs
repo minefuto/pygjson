@@ -171,6 +171,39 @@ impl Value {
         Ok(Py::new(py, val)?.into_any())
     }
 
+    /// Get child values at each of the given gjson paths.
+    ///
+    /// If `default` is given and a path is not found, returns `default` in
+    /// that position instead of a `Value` with `exists=False`.
+    #[pyo3(signature = (paths, *args))]
+    fn get_many(
+        &self,
+        py: Python<'_>,
+        paths: Vec<String>,
+        args: &Bound<'_, pyo3::types::PyTuple>,
+    ) -> PyResult<Py<PyAny>> {
+        if args.len() > 1 {
+            return Err(pyo3::exceptions::PyTypeError::new_err(
+                "get_many() takes at most 2 positional arguments",
+            ));
+        }
+        let path_refs: Vec<&str> = paths.iter().map(String::as_str).collect();
+        let values: Vec<Value> = gjson::get_many(self.raw_slice(), &path_refs)
+            .into_iter()
+            .map(|v| Value::child(&self.raw, v))
+            .collect();
+        let has_default = !args.is_empty();
+        let list = pyo3::types::PyList::empty(py);
+        for v in values {
+            if has_default && !v.exists {
+                list.append(args.get_item(0)?)?;
+            } else {
+                list.append(Py::new(py, v)?)?;
+            }
+        }
+        Ok(list.into_any().unbind())
+    }
+
     /// Return the value as a list of `Value` objects (empty for non-arrays).
     fn to_list(&self) -> Vec<Value> {
         let mut out = Vec::new();
@@ -646,6 +679,17 @@ fn valid(json: &str) -> bool {
     gjson::valid(json)
 }
 
+/// Get the values at each path in `paths` from the given JSON document.
+#[pyfunction]
+fn get_many(json: &str, paths: Vec<String>) -> Vec<Value> {
+    let raw: Arc<str> = Arc::from(json);
+    let path_refs: Vec<&str> = paths.iter().map(String::as_str).collect();
+    gjson::get_many(&raw, &path_refs)
+        .into_iter()
+        .map(|v| Value::child(&raw, v))
+        .collect()
+}
+
 #[pymodule]
 fn _pygjson(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Kind>()?;
@@ -657,5 +701,6 @@ fn _pygjson(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(get, m)?)?;
     m.add_function(wrap_pyfunction!(parse, m)?)?;
     m.add_function(wrap_pyfunction!(valid, m)?)?;
+    m.add_function(wrap_pyfunction!(get_many, m)?)?;
     Ok(())
 }
