@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "pygjson"
-version = "0.0.3"
+version = "0.0.4"
 description = "Python bindings for gjson.rs - fast JSON path queries"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
@@ -12,6 +12,12 @@ readme = "README.md"
 classifiers = [
     "Programming Language :: Rust",
     "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
 ]
 
 [tool.maturin]

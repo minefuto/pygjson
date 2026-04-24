@@ -1,5 +1,6 @@
 # pygjson
 
+![PyPI - Python Version](https://img.shields.io/pypi/pyversions/pygjson)
 ![PyPI - Version](https://img.shields.io/pypi/v/pygjson)
 ![GitHub License](https://img.shields.io/github/license/minefuto/pygjson)
 
