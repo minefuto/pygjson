@@ -1,9 +1,8 @@
 use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyTuple};
+use pyo3::types::{PyBool, PyDict, PyFloat, PyInt, PyList, PyNone, PyString, PyTuple};
 use std::sync::Arc;
 
-/// Mirror of `gjson::Kind`, exposed to Python as a class with constant attributes.
 #[pyclass(module = "pygjson._pygjson", eq, eq_int, skip_from_py_object)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -44,8 +43,8 @@ fn map_kind(k: gjson::Kind) -> Kind {
 /// values produced by `get`, iteration, `to_list`, etc. share the same `Arc`
 /// instead of cloning the underlying text, which avoids a fresh heap
 /// allocation per child element.
-#[pyclass(module = "pygjson._pygjson", name = "Value")]
-pub struct Value {
+#[pyclass(module = "pygjson._pygjson", name = "Result")]
+pub struct JsonResult {
     raw: Arc<str>,
     start: usize,
     end: usize,
@@ -53,7 +52,7 @@ pub struct Value {
     exists: bool,
 }
 
-impl Value {
+impl JsonResult {
     fn raw_slice(&self) -> &str {
         &self.raw[self.start..self.end]
     }
@@ -62,7 +61,6 @@ impl Value {
         gjson::parse(self.raw_slice())
     }
 
-    /// Build a `Value` that owns a fresh `Arc<str>` containing `text`.
     fn from_owned_text(text: &str, kind: Kind, exists: bool) -> Self {
         let raw: Arc<str> = Arc::from(text);
         let end = raw.len();
@@ -75,9 +73,6 @@ impl Value {
         }
     }
 
-    /// Build a child `Value` that shares the parent's `Arc<str>` whenever the
-    /// child's text is a borrowed slice of it. Falls back to a fresh
-    /// allocation for owned children (e.g. modifier output).
     fn child(parent: &Arc<str>, child: gjson::Value<'_>) -> Self {
         let kind = map_kind(child.kind());
         let exists = child.exists();
@@ -105,10 +100,108 @@ impl Value {
 }
 
 #[pymethods]
-impl Value {
-    /// Return the gjson `Kind` of this value.
-    fn kind(&self) -> Kind {
-        self.kind
+impl JsonResult {
+    /// Return the Python type corresponding to this value's JSON kind.
+    ///
+    /// Null   → None
+    /// True/False → bool
+    /// Number → int (integer) or float (floating-point)
+    /// String → str
+    /// Array  → list
+    /// Object → dict
+    #[getter]
+    fn type_(&self, py: Python<'_>) -> Py<PyAny> {
+        match self.kind {
+            Kind::Null => PyNone::get(py).as_any().clone().unbind(),
+            Kind::False | Kind::True => py.get_type::<PyBool>().into_any().unbind(),
+            Kind::Number => {
+                let s = self.raw_slice();
+                if s.contains('.') || s.contains('e') || s.contains('E') {
+                    py.get_type::<PyFloat>().into_any().unbind()
+                } else {
+                    py.get_type::<PyInt>().into_any().unbind()
+                }
+            }
+            Kind::String => py.get_type::<PyString>().into_any().unbind(),
+            Kind::Array => py.get_type::<PyList>().into_any().unbind(),
+            Kind::Object => py.get_type::<PyDict>().into_any().unbind(),
+        }
+    }
+
+    /// Return the inner value as the Python type indicated by `type_`.
+    ///
+    /// Null → None; bool kinds → bool; Number → int or float;
+    /// String → str; Array → list[Result]; Object → dict[str, Result].
+    #[getter]
+    fn value(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        match self.kind {
+            Kind::Null => Ok(PyNone::get(py).as_any().clone().unbind()),
+            Kind::False | Kind::True => {
+                Ok(self.parsed().bool().into_pyobject(py)?.as_any().clone().unbind())
+            }
+            Kind::Number => {
+                let s = self.raw_slice();
+                if s.contains('.') || s.contains('e') || s.contains('E') {
+                    Ok(self.parsed().f64().into_pyobject(py)?.into_any().unbind())
+                } else if s.starts_with('-') {
+                    Ok(self.parsed().i64().into_pyobject(py)?.into_any().unbind())
+                } else {
+                    Ok(self.parsed().u64().into_pyobject(py)?.into_any().unbind())
+                }
+            }
+            Kind::String => Ok(self.parsed().str().into_pyobject(py)?.into_any().unbind()),
+            Kind::Array => {
+                let list = PyList::empty(py);
+                let parsed = self.parsed();
+                let mut err: Option<PyErr> = None;
+                parsed.each(|_k, v| {
+                    let child = JsonResult::child(&self.raw, v);
+                    match Py::new(py, child) {
+                        Ok(obj) => match list.append(obj) {
+                            Ok(()) => true,
+                            Err(e) => {
+                                err = Some(e);
+                                false
+                            }
+                        },
+                        Err(e) => {
+                            err = Some(e);
+                            false
+                        }
+                    }
+                });
+                if let Some(e) = err {
+                    return Err(e);
+                }
+                Ok(list.into_any().unbind())
+            }
+            Kind::Object => {
+                let dict = PyDict::new(py);
+                let parsed = self.parsed();
+                let mut err: Option<PyErr> = None;
+                parsed.each(|k, v| {
+                    let key = k.str().to_string();
+                    let child = JsonResult::child(&self.raw, v);
+                    match Py::new(py, child) {
+                        Ok(obj) => match dict.set_item(key, obj) {
+                            Ok(()) => true,
+                            Err(e) => {
+                                err = Some(e);
+                                false
+                            }
+                        },
+                        Err(e) => {
+                            err = Some(e);
+                            false
+                        }
+                    }
+                });
+                if let Some(e) = err {
+                    return Err(e);
+                }
+                Ok(dict.into_any().unbind())
+            }
+        }
     }
 
     /// Whether the value was actually present in the source JSON.
@@ -122,14 +215,13 @@ impl Value {
         self.parsed().str().to_string()
     }
 
-    /// Signed integer value (`i64`).
+    /// Integer value. Uses `u64` for non-negative values, `i64` for negative.
     fn to_int(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        Ok(self.parsed().i64().into_pyobject(py)?.into_any().unbind())
-    }
-
-    /// Unsigned integer value (`u64`).
-    fn to_uint(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        Ok(self.parsed().u64().into_pyobject(py)?.into_any().unbind())
+        if self.raw_slice().starts_with('-') {
+            Ok(self.parsed().i64().into_pyobject(py)?.into_any().unbind())
+        } else {
+            Ok(self.parsed().u64().into_pyobject(py)?.into_any().unbind())
+        }
     }
 
     /// Floating point value.
@@ -149,82 +241,39 @@ impl Value {
     }
 
     /// Get a child value at the given gjson path.
-    ///
-    /// If `default` is given and the path is not found, returns `default` instead.
-    #[pyo3(signature = (path, *args))]
-    fn get(
-        &self,
-        py: Python<'_>,
-        path: &str,
-        args: &Bound<'_, pyo3::types::PyTuple>,
-    ) -> PyResult<Py<PyAny>> {
-        if args.len() > 1 {
-            return Err(pyo3::exceptions::PyTypeError::new_err(
-                "get() takes at most 2 positional arguments",
-            ));
-        }
-        let parsed = self.parsed();
-        let val = Value::child(&self.raw, parsed.get(path));
-        if !val.exists && !args.is_empty() {
-            return Ok(args.get_item(0)?.unbind());
-        }
-        Ok(Py::new(py, val)?.into_any())
+    fn get(&self, path: &str) -> JsonResult {
+        JsonResult::child(&self.raw, self.parsed().get(path))
     }
 
     /// Get child values at each of the given gjson paths.
-    ///
-    /// If `default` is given and a path is not found, returns `default` in
-    /// that position instead of a `Value` with `exists=False`.
-    #[pyo3(signature = (paths, *args))]
-    fn get_many(
-        &self,
-        py: Python<'_>,
-        paths: Vec<String>,
-        args: &Bound<'_, pyo3::types::PyTuple>,
-    ) -> PyResult<Py<PyAny>> {
-        if args.len() > 1 {
-            return Err(pyo3::exceptions::PyTypeError::new_err(
-                "get_many() takes at most 2 positional arguments",
-            ));
-        }
+    fn get_many(&self, paths: Vec<String>) -> Vec<JsonResult> {
         let path_refs: Vec<&str> = paths.iter().map(String::as_str).collect();
-        let values: Vec<Value> = gjson::get_many(self.raw_slice(), &path_refs)
+        gjson::get_many(self.raw_slice(), &path_refs)
             .into_iter()
-            .map(|v| Value::child(&self.raw, v))
-            .collect();
-        let has_default = !args.is_empty();
-        let list = pyo3::types::PyList::empty(py);
-        for v in values {
-            if has_default && !v.exists {
-                list.append(args.get_item(0)?)?;
-            } else {
-                list.append(Py::new(py, v)?)?;
-            }
-        }
-        Ok(list.into_any().unbind())
+            .map(|v| JsonResult::child(&self.raw, v))
+            .collect()
     }
 
-    /// Return the value as a list of `Value` objects (empty for non-arrays).
-    fn to_list(&self) -> Vec<Value> {
+    /// Return the value as a list of `Result` objects (empty for non-arrays).
+    fn to_list(&self) -> Vec<JsonResult> {
         let mut out = Vec::new();
         let parsed = self.parsed();
         parsed.each(|_k, v| {
-            out.push(Value::child(&self.raw, v));
+            out.push(JsonResult::child(&self.raw, v));
             true
         });
         out
     }
 
-    /// Return the value as a `dict[str, Value]` (empty for non-objects).
+    /// Return the value as a `dict[str, Result]` (empty for non-objects).
     fn to_dict<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         let dict = PyDict::new(py);
-        // Only iterate as a map for objects; arrays would yield empty keys.
         if matches!(self.kind, Kind::Object) {
             let parsed = self.parsed();
             let mut err: Option<PyErr> = None;
             parsed.each(|k, v| {
                 let key = k.str().to_string();
-                let child = Value::child(&self.raw, v);
+                let child = JsonResult::child(&self.raw, v);
                 match dict.set_item(key, child) {
                     Ok(()) => true,
                     Err(e) => {
@@ -289,14 +338,11 @@ impl Value {
                 });
                 Ok(count)
             }
-            _ => Err(PyTypeError::new_err("Value has no len()")),
+            _ => Err(PyTypeError::new_err("Result has no len()")),
         }
     }
 
-    /// Iterate: String → chars, Array → Values, Object → keys.
-    ///
-    /// Returns a lazy `ValueIterator` so the elements are produced one at a
-    /// time and only one Python wrapper is alive at any moment.
+    /// Iterate: String → chars, Array → Results, Object → keys.
     fn __iter__(&self, py: Python<'_>) -> PyResult<Py<ValueIterator>> {
         let it = match self.kind {
             Kind::String => ValueIterator::for_string_chars(self),
@@ -304,7 +350,7 @@ impl Value {
             Kind::Object => ValueIterator::for_object_keys(self),
             _ => {
                 return Err(PyTypeError::new_err(
-                    "Value is not iterable (only String, Array, and Object are iterable)",
+                    "Result is not iterable (only String, Array, and Object are iterable)",
                 ));
             }
         };
@@ -312,13 +358,13 @@ impl Value {
     }
 
     /// Subscript access for Object values (enables the `dict()` mapping protocol).
-    fn __getitem__(&self, key: &str) -> PyResult<Value> {
+    fn __getitem__(&self, key: &str) -> PyResult<JsonResult> {
         if !matches!(self.kind, Kind::Object) {
             return Err(PyTypeError::new_err(
                 "subscript access is only supported for Object values",
             ));
         }
-        Ok(Value::child(&self.raw, self.parsed().get(key)))
+        Ok(JsonResult::child(&self.raw, self.parsed().get(key)))
     }
 
     /// Return a lazy view of the object's keys (similar to `dict.keys()`).
@@ -386,7 +432,7 @@ impl Value {
     }
 
     fn __repr__(&self) -> String {
-        format!("Value({})", self.raw_slice())
+        format!("Result({})", self.raw_slice())
     }
 
     fn __str__(&self) -> String {
@@ -400,35 +446,26 @@ impl Value {
 
 #[derive(Clone, Copy)]
 enum IterMode {
-    /// Yield successive `str` items from `strings`.
     Strings,
-    /// Yield successive `Value` items from `children`.
     Values,
-    /// Yield `(key, value)` tuples from `strings` and `children` in lockstep.
     Items,
 }
 
 /// Lazy iterator over an Array, Object or String value.
-///
-/// The constructor walks the underlying gjson value once and records either
-/// child `Value` handles (which share the parent's `Arc<str>`) or pre-computed
-/// strings (for keys / chars). `__next__` then yields one Python object at a
-/// time, so the peak number of simultaneously-live Python wrappers is one
-/// regardless of the collection size.
 #[pyclass(module = "pygjson._pygjson")]
 pub struct ValueIterator {
-    children: Vec<Value>,
+    children: Vec<JsonResult>,
     strings: Vec<Box<str>>,
     cursor: usize,
     mode: IterMode,
 }
 
 impl ValueIterator {
-    fn for_array_values(value: &Value) -> Self {
-        let mut children: Vec<Value> = Vec::new();
+    fn for_array_values(value: &JsonResult) -> Self {
+        let mut children: Vec<JsonResult> = Vec::new();
         let parsed = gjson::parse(value.raw_slice());
         parsed.each(|_k, v| {
-            children.push(Value::child(&value.raw, v));
+            children.push(JsonResult::child(&value.raw, v));
             true
         });
         Self {
@@ -439,7 +476,7 @@ impl ValueIterator {
         }
     }
 
-    fn for_object_keys(value: &Value) -> Self {
+    fn for_object_keys(value: &JsonResult) -> Self {
         let mut strings: Vec<Box<str>> = Vec::new();
         let parsed = gjson::parse(value.raw_slice());
         parsed.each(|k, _v| {
@@ -454,19 +491,17 @@ impl ValueIterator {
         }
     }
 
-    fn for_object_values(value: &Value) -> Self {
-        // Same shape as `for_array_values`, kept as a separate constructor so
-        // that the call sites read clearly.
+    fn for_object_values(value: &JsonResult) -> Self {
         Self::for_array_values(value)
     }
 
-    fn for_object_items(value: &Value) -> Self {
-        let mut children: Vec<Value> = Vec::new();
+    fn for_object_items(value: &JsonResult) -> Self {
+        let mut children: Vec<JsonResult> = Vec::new();
         let mut strings: Vec<Box<str>> = Vec::new();
         let parsed = gjson::parse(value.raw_slice());
         parsed.each(|k, v| {
             strings.push(k.str().to_string().into_boxed_str());
-            children.push(Value::child(&value.raw, v));
+            children.push(JsonResult::child(&value.raw, v));
             true
         });
         Self {
@@ -477,7 +512,7 @@ impl ValueIterator {
         }
     }
 
-    fn for_string_chars(value: &Value) -> Self {
+    fn for_string_chars(value: &JsonResult) -> Self {
         let s = value.parsed().str().to_string();
         let strings: Vec<Box<str>> = s
             .chars()
@@ -514,7 +549,7 @@ impl ValueIterator {
                 }
                 self.cursor += 1;
                 let v = &self.children[i];
-                let cloned = Value {
+                let cloned = JsonResult {
                     raw: Arc::clone(&v.raw),
                     start: v.start,
                     end: v.end,
@@ -529,7 +564,7 @@ impl ValueIterator {
                 }
                 self.cursor += 1;
                 let v = &self.children[i];
-                let cloned = Value {
+                let cloned = JsonResult {
                     raw: Arc::clone(&v.raw),
                     start: v.start,
                     end: v.end,
@@ -554,11 +589,9 @@ impl ValueIterator {
     }
 }
 
-/// Lightweight view returned by `Value.keys()`. Iteration constructs a
-/// `ValueIterator` lazily so the keys are only collected when actually used.
 #[pyclass(module = "pygjson._pygjson")]
 pub struct KeysView {
-    value: Py<Value>,
+    value: Py<JsonResult>,
 }
 
 #[pymethods]
@@ -597,10 +630,9 @@ impl KeysView {
     }
 }
 
-/// Lightweight view returned by `Value.values()`.
 #[pyclass(module = "pygjson._pygjson")]
 pub struct ValuesView {
-    value: Py<Value>,
+    value: Py<JsonResult>,
 }
 
 #[pymethods]
@@ -618,17 +650,16 @@ impl ValuesView {
         let v = self.value.borrow(py);
         let mut parts: Vec<String> = Vec::new();
         v.parsed().each(|_k, vv| {
-            parts.push(format!("Value({})", vv.json()));
+            parts.push(format!("Result({})", vv.json()));
             true
         });
         format!("ValuesView([{}])", parts.join(", "))
     }
 }
 
-/// Lightweight view returned by `Value.items()`.
 #[pyclass(module = "pygjson._pygjson")]
 pub struct ItemsView {
-    value: Py<Value>,
+    value: Py<JsonResult>,
 }
 
 #[pymethods]
@@ -646,7 +677,7 @@ impl ItemsView {
         let v = self.value.borrow(py);
         let mut parts: Vec<String> = Vec::new();
         v.parsed().each(|k, vv| {
-            parts.push(format!("({:?}, Value({}))", k.str(), vv.json()));
+            parts.push(format!("({:?}, Result({}))", k.str(), vv.json()));
             true
         });
         format!("ItemsView([{}])", parts.join(", "))
@@ -659,48 +690,48 @@ impl ItemsView {
 
 /// Get the value at `path` from the given JSON document.
 #[pyfunction]
-fn get(json: &str, path: &str) -> Value {
+fn get(json: &str, path: &str) -> JsonResult {
     let raw: Arc<str> = Arc::from(json);
     let parsed = gjson::get(&raw, path);
-    Value::child(&raw, parsed)
+    JsonResult::child(&raw, parsed)
 }
 
-/// Parse the entire JSON document into a `Value`.
+/// Parse the entire JSON document into a `Result`.
 #[pyfunction]
-fn parse(json: &str) -> Value {
+fn parse(json: &str) -> JsonResult {
     let raw: Arc<str> = Arc::from(json);
     let parsed = gjson::parse(&raw);
-    Value::child(&raw, parsed)
+    JsonResult::child(&raw, parsed)
 }
 
 /// Validate whether `json` is a syntactically valid JSON document.
 #[pyfunction]
-fn valid(json: &str) -> bool {
+fn validate(json: &str) -> bool {
     gjson::valid(json)
 }
 
 /// Get the values at each path in `paths` from the given JSON document.
 #[pyfunction]
-fn get_many(json: &str, paths: Vec<String>) -> Vec<Value> {
+fn get_many(json: &str, paths: Vec<String>) -> Vec<JsonResult> {
     let raw: Arc<str> = Arc::from(json);
     let path_refs: Vec<&str> = paths.iter().map(String::as_str).collect();
     gjson::get_many(&raw, &path_refs)
         .into_iter()
-        .map(|v| Value::child(&raw, v))
+        .map(|v| JsonResult::child(&raw, v))
         .collect()
 }
 
 #[pymodule]
 fn _pygjson(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Kind>()?;
-    m.add_class::<Value>()?;
+    m.add_class::<JsonResult>()?;
     m.add_class::<ValueIterator>()?;
     m.add_class::<KeysView>()?;
     m.add_class::<ValuesView>()?;
     m.add_class::<ItemsView>()?;
     m.add_function(wrap_pyfunction!(get, m)?)?;
     m.add_function(wrap_pyfunction!(parse, m)?)?;
-    m.add_function(wrap_pyfunction!(valid, m)?)?;
+    m.add_function(wrap_pyfunction!(validate, m)?)?;
     m.add_function(wrap_pyfunction!(get_many, m)?)?;
     Ok(())
 }
