@@ -7,8 +7,9 @@ name = "pygjson"
 version = "0.0.4"
 description = "Python bindings for gjson.rs - fast JSON path queries"
 requires-python = ">=3.10"
-license = { file = "LICENSE" }
 readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "minefuto" }]
 classifiers = [
     "Programming Language :: Rust",
     "Programming Language :: Python :: Implementation :: CPython",
@@ -19,6 +20,9 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
 ]
+
+[tool.uv]
+cache-keys = [{ file = "pyproject.toml" }, { file = "src/**/*.rs" }, { file = "Cargo.toml" }, { file = "Cargo.lock" }]
 
 [tool.maturin]
 python-source = "python"
