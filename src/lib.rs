@@ -1,6 +1,6 @@
-use pyo3::exceptions::{PyTypeError, PyUnicodeDecodeError};
+use pyo3::exceptions::{PyIndexError, PyKeyError, PyTypeError, PyUnicodeDecodeError};
 use pyo3::prelude::*;
-use pyo3::types::{PyBool, PyDict, PyFloat, PyInt, PyList, PyNone, PyString, PyTuple};
+use pyo3::types::{PyBool, PyDict, PyFloat, PyInt, PyList, PyNone, PySlice, PyString, PyTuple};
 use std::sync::Arc;
 
 #[pyclass(module = "pygjson._pygjson", eq, eq_int, skip_from_py_object)]
@@ -372,14 +372,96 @@ impl JsonResult {
         Py::new(py, it)
     }
 
-    /// Subscript access for Object values (enables the `dict()` mapping protocol).
-    fn __getitem__(&self, key: &str) -> PyResult<JsonResult> {
-        if !matches!(self.kind, Kind::Object) {
-            return Err(PyTypeError::new_err(
-                "subscript access is only supported for Object values",
-            ));
+    /// Subscript access.
+    ///
+    /// String: int → Nth code point; slice → substring; str → TypeError
+    /// Array:  int → Result; slice → Array Result of selected elements; str → TypeError
+    /// Object: str → Result; int/slice → KeyError
+    /// Null:   int → IndexError; slice → empty Result; str → TypeError
+    fn __getitem__(&self, key: &Bound<'_, PyAny>, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        match self.kind {
+            Kind::String => {
+                if let Ok(slice) = key.cast::<PySlice>() {
+                    let chars: Vec<char> = self.parsed().str().chars().collect();
+                    let idx = slice.indices(chars.len() as isize)?;
+                    let mut s = String::new();
+                    let mut i = idx.start;
+                    while (idx.step > 0 && i < idx.stop) || (idx.step < 0 && i > idx.stop) {
+                        s.push(chars[i as usize]);
+                        i += idx.step;
+                    }
+                    return Ok(s.into_pyobject(py)?.into_any().unbind());
+                }
+                if let Ok(n) = key.extract::<isize>() {
+                    let chars: Vec<char> = self.parsed().str().chars().collect();
+                    let len = chars.len() as isize;
+                    let actual = if n < 0 { n + len } else { n };
+                    if actual < 0 || actual >= len {
+                        return Err(PyIndexError::new_err("string index out of range"));
+                    }
+                    let c = chars[actual as usize].to_string();
+                    return Ok(c.into_pyobject(py)?.into_any().unbind());
+                }
+                Err(PyTypeError::new_err(
+                    "string indices must be integers or slices, not str",
+                ))
+            }
+            Kind::Array => {
+                if let Ok(slice) = key.cast::<PySlice>() {
+                    let mut children: Vec<JsonResult> = Vec::new();
+                    self.parsed().each(|_k, v| {
+                        children.push(JsonResult::child(&self.raw, v));
+                        true
+                    });
+                    let len = children.len() as isize;
+                    let idx = slice.indices(len)?;
+                    let mut parts: Vec<String> = Vec::new();
+                    let mut i = idx.start;
+                    while (idx.step > 0 && i < idx.stop) || (idx.step < 0 && i > idx.stop) {
+                        parts.push(children[i as usize].raw_slice().to_string());
+                        i += idx.step;
+                    }
+                    let json_array = format!("[{}]", parts.join(","));
+                    let result = JsonResult::from_owned_text(&json_array, Kind::Array, true);
+                    return Ok(Py::new(py, result)?.into_any());
+                }
+                if let Ok(n) = key.extract::<isize>() {
+                    let mut children: Vec<JsonResult> = Vec::new();
+                    self.parsed().each(|_k, v| {
+                        children.push(JsonResult::child(&self.raw, v));
+                        true
+                    });
+                    let len = children.len() as isize;
+                    let actual = if n < 0 { n + len } else { n };
+                    if actual < 0 || actual >= len {
+                        return Err(PyIndexError::new_err("list index out of range"));
+                    }
+                    let child = children.remove(actual as usize);
+                    return Ok(Py::new(py, child)?.into_any());
+                }
+                Err(PyTypeError::new_err(
+                    "list indices must be integers or slices, not str",
+                ))
+            }
+            Kind::Object => {
+                if let Ok(s) = key.extract::<String>() {
+                    let result = JsonResult::child(&self.raw, self.parsed().get(&s));
+                    return Ok(Py::new(py, result)?.into_any());
+                }
+                Err(PyKeyError::new_err(key.repr()?.to_string()))
+            }
+            Kind::Null => {
+                if key.cast::<PySlice>().is_ok() {
+                    let result = JsonResult::from_owned_text("", Kind::Null, false);
+                    return Ok(Py::new(py, result)?.into_any());
+                }
+                if key.extract::<isize>().is_ok() {
+                    return Err(PyIndexError::new_err("null value has no indices"));
+                }
+                Err(PyTypeError::new_err("null value is not subscriptable"))
+            }
+            _ => Err(PyTypeError::new_err("value does not support subscript access")),
         }
-        Ok(JsonResult::child(&self.raw, self.parsed().get(key)))
     }
 
     /// Return a lazy view of the object's keys (similar to `dict.keys()`).

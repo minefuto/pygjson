@@ -380,3 +380,123 @@ def test_get_many_bytes_instance():
 def test_get_bytes_exports():
     assert pygjson.get_bytes is get_bytes
     assert pygjson.get_many_bytes is get_many_bytes
+
+
+# ---------------------------------------------------------------------------
+# __getitem__ extension
+# ---------------------------------------------------------------------------
+
+def test_getitem_string_int():
+    s = get(JSON, "name.first")  # "Tom"
+    assert s[0] == "T"
+    assert s[1] == "o"
+    assert s[-1] == "m"
+
+
+def test_getitem_string_int_oob():
+    s = get(JSON, "name.first")
+    with pytest.raises(IndexError):
+        _ = s[100]
+    with pytest.raises(IndexError):
+        _ = s[-100]
+
+
+def test_getitem_string_slice():
+    s = get(JSON, "name.first")  # "Tom"
+    assert s[0:2] == "To"
+    assert s[1:] == "om"
+    assert s[::-1] == "moT"
+    assert s[:] == "Tom"
+
+
+def test_getitem_string_str_raises():
+    s = get(JSON, "name.first")
+    with pytest.raises(TypeError):
+        _ = s["x"]
+
+
+def test_getitem_string_bool_as_int():
+    s = get(JSON, "name.first")  # "Tom"
+    assert s[False] == "T"  # False == 0
+    assert s[True] == "o"   # True == 1
+
+
+def test_getitem_array_int():
+    children = get(JSON, "children")
+    assert str(children[0]) == "Sara"
+    assert str(children[2]) == "Jack"
+    assert str(children[-1]) == "Jack"
+    assert str(children[-3]) == "Sara"
+
+
+def test_getitem_array_int_oob():
+    children = get(JSON, "children")
+    with pytest.raises(IndexError):
+        _ = children[100]
+    with pytest.raises(IndexError):
+        _ = children[-100]
+
+
+def test_getitem_array_slice():
+    children = get(JSON, "children")
+    sliced = children[0:2]
+    assert isinstance(sliced, Result)
+    assert sliced.type_ == list
+    assert [str(v) for v in sliced] == ["Sara", "Alex"]
+    assert [str(v) for v in children[::-1]] == ["Jack", "Alex", "Sara"]
+    assert [str(v) for v in children[:]] == ["Sara", "Alex", "Jack"]
+
+
+def test_getitem_array_str_raises():
+    children = get(JSON, "children")
+    with pytest.raises(TypeError):
+        _ = children["x"]
+
+
+def test_getitem_array_bool_as_int():
+    children = get(JSON, "children")
+    assert str(children[False]) == "Sara"   # False == 0
+    assert str(children[True]) == "Alex"    # True == 1
+
+
+def test_getitem_object_str():
+    name = get(JSON, "name")
+    assert str(name["first"]) == "Tom"
+    assert str(name["last"]) == "Anderson"
+
+
+def test_getitem_object_int_raises():
+    name = get(JSON, "name")
+    with pytest.raises(KeyError):
+        _ = name[0]
+
+
+def test_getitem_object_slice_raises():
+    name = get(JSON, "name")
+    with pytest.raises(KeyError):
+        _ = name[0:1]
+
+
+def test_getitem_null_int_raises():
+    null_val = get('{"x": null}', "x")
+    with pytest.raises(IndexError):
+        _ = null_val[0]
+
+
+def test_getitem_null_slice_returns_empty():
+    null_val = get('{"x": null}', "x")
+    r = null_val[0:1]
+    assert isinstance(r, Result)
+    assert not r.exists()
+
+
+def test_getitem_null_str_raises():
+    null_val = get('{"x": null}', "x")
+    with pytest.raises(TypeError):
+        _ = null_val["key"]
+
+
+def test_getitem_number_raises():
+    age = get(JSON, "age")
+    with pytest.raises(TypeError):
+        _ = age[0]
