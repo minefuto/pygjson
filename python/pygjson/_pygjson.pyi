@@ -68,14 +68,8 @@ class Result:
     def get(self, path: str) -> "Result":
         """Get a child value at the given gjson path."""
 
-    def get_bytes(self, path: str) -> "Result":
-        """Get a child value at the given gjson path using byte-slice internally."""
-
     def get_many(self, paths: Sequence[str]) -> List["Result"]:
         """Get child values at each of the given gjson paths."""
-
-    def get_many_bytes(self, paths: Sequence[str]) -> List["Result"]:
-        """Get child values at each of the given gjson paths using byte-slice internally."""
 
     def keys(self) -> KeysView:
         """Return a lazy view of the object's keys.

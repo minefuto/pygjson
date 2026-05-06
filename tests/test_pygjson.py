@@ -390,18 +390,6 @@ def test_get_many_bytes_module_level():
     assert int(results[1]) == 37
 
 
-def test_get_bytes_instance():
-    root = parse(JSON)
-    assert str(root.get_bytes("name.first")) == "Tom"
-
-
-def test_get_many_bytes_instance():
-    root = parse(JSON)
-    results = root.get_many_bytes(["name.first", "name.last"])
-    assert str(results[0]) == "Tom"
-    assert str(results[1]) == "Anderson"
-
-
 def test_get_bytes_exports():
     assert pygjson.get_bytes is get_bytes
     assert pygjson.get_many_bytes is get_many_bytes

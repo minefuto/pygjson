@@ -204,27 +204,13 @@ impl JsonResult {
 
     /// Get a child value at the given gjson path.
     fn get(&self, path: &str) -> JsonResult {
-        JsonResult::child(&self.raw, self.parsed().get(path))
-    }
-
-    /// Get child values at each of the given gjson paths.
-    fn get_many(&self, paths: Vec<String>) -> Vec<JsonResult> {
-        let path_refs: Vec<&str> = paths.iter().map(String::as_str).collect();
-        gjson::get_many(self.raw_slice(), &path_refs)
-            .into_iter()
-            .map(|v| JsonResult::child(&self.raw, v))
-            .collect()
-    }
-
-    /// Get a child value at the given gjson path from the byte-slice representation.
-    fn get_bytes(&self, path: &str) -> JsonResult {
         // SAFETY: raw_slice() is always valid UTF-8 (stored as Arc<str>)
         let v = unsafe { gjson::get_bytes(self.raw_slice().as_bytes(), path) };
         JsonResult::child(&self.raw, v)
     }
 
-    /// Get child values at each of the given gjson paths from the byte-slice representation.
-    fn get_many_bytes(&self, paths: Vec<String>) -> Vec<JsonResult> {
+    /// Get child values at each of the given gjson paths.
+    fn get_many(&self, paths: Vec<String>) -> Vec<JsonResult> {
         let path_refs: Vec<&str> = paths.iter().map(String::as_str).collect();
         // SAFETY: raw_slice() is always valid UTF-8 (stored as Arc<str>)
         let vs = unsafe { gjson::get_many_bytes(self.raw_slice().as_bytes(), &path_refs) };

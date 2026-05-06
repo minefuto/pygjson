@@ -78,9 +78,7 @@ pygjson.validate(JSON)  # True
 | `v.to_float()`           | 64-bit float                                              |
 | `v.to_bool()`            | `True` only for the JSON literal `true`                   |
 | `v.get(path)`            | Sub-query relative to this value                          |
-| `v.get_bytes(path)`      | Same as `get` but uses byte-slice internally              |
 | `v.get_many(paths)`      | Sub-query at multiple paths; returns `list[Result]`       |
-| `v.get_many_bytes(paths)`| Same as `get_many` but uses byte-slice internally         |
 
 **Pythonic methods** — follow standard Python protocols:
 
