@@ -407,6 +407,11 @@ def test_get_bytes_exports():
     assert pygjson.get_many_bytes is get_many_bytes
 
 
+def test_kind_not_exported():
+    import pygjson._pygjson as m
+    assert not hasattr(m, "Kind")
+
+
 # ---------------------------------------------------------------------------
 # __bool__ (bool(result.value) semantics)
 # ---------------------------------------------------------------------------

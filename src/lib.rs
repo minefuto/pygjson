@@ -3,39 +3,6 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyDict, PyFloat, PyInt, PyList, PyNone, PySlice, PyString, PyTuple};
 use std::sync::Arc;
 
-#[pyclass(module = "pygjson._pygjson", eq, eq_int, skip_from_py_object)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Kind {
-    Null,
-    #[pyo3(name = "False_")]
-    False,
-    Number,
-    String,
-    #[pyo3(name = "True_")]
-    True,
-    Array,
-    Object,
-}
-
-#[pymethods]
-impl Kind {
-    fn __repr__(&self) -> String {
-        format!("Kind.{:?}", self)
-    }
-}
-
-fn map_kind(k: gjson::Kind) -> Kind {
-    match k {
-        gjson::Kind::Null => Kind::Null,
-        gjson::Kind::False => Kind::False,
-        gjson::Kind::Number => Kind::Number,
-        gjson::Kind::String => Kind::String,
-        gjson::Kind::True => Kind::True,
-        gjson::Kind::Array => Kind::Array,
-        gjson::Kind::Object => Kind::Object,
-    }
-}
-
 /// A JSON value returned by `get` / `parse`.
 ///
 /// The wrapper holds a reference-counted handle to the raw JSON text together
@@ -48,7 +15,7 @@ pub struct JsonResult {
     raw: Arc<str>,
     start: usize,
     end: usize,
-    kind: Kind,
+    kind: gjson::Kind,
     exists: bool,
 }
 
@@ -61,7 +28,7 @@ impl JsonResult {
         gjson::parse(self.raw_slice())
     }
 
-    fn from_owned_text(text: &str, kind: Kind, exists: bool) -> Self {
+    fn from_owned_text(text: &str, kind: gjson::Kind, exists: bool) -> Self {
         let raw: Arc<str> = Arc::from(text);
         let end = raw.len();
         Self {
@@ -74,7 +41,7 @@ impl JsonResult {
     }
 
     fn child(parent: &Arc<str>, child: gjson::Value<'_>) -> Self {
-        let kind = map_kind(child.kind());
+        let kind = child.kind();
         let exists = child.exists();
         let child_text = child.json();
         if !child_text.is_empty() {
@@ -112,9 +79,9 @@ impl JsonResult {
     #[getter]
     fn type_(&self, py: Python<'_>) -> Py<PyAny> {
         match self.kind {
-            Kind::Null => PyNone::get(py).as_any().clone().unbind(),
-            Kind::False | Kind::True => py.get_type::<PyBool>().into_any().unbind(),
-            Kind::Number => {
+            gjson::Kind::Null => PyNone::get(py).as_any().clone().unbind(),
+            gjson::Kind::False | gjson::Kind::True => py.get_type::<PyBool>().into_any().unbind(),
+            gjson::Kind::Number => {
                 let s = self.raw_slice();
                 if s.contains('.') || s.contains('e') || s.contains('E') {
                     py.get_type::<PyFloat>().into_any().unbind()
@@ -122,9 +89,9 @@ impl JsonResult {
                     py.get_type::<PyInt>().into_any().unbind()
                 }
             }
-            Kind::String => py.get_type::<PyString>().into_any().unbind(),
-            Kind::Array => py.get_type::<PyList>().into_any().unbind(),
-            Kind::Object => py.get_type::<PyDict>().into_any().unbind(),
+            gjson::Kind::String => py.get_type::<PyString>().into_any().unbind(),
+            gjson::Kind::Array => py.get_type::<PyList>().into_any().unbind(),
+            gjson::Kind::Object => py.get_type::<PyDict>().into_any().unbind(),
         }
     }
 
@@ -135,11 +102,11 @@ impl JsonResult {
     #[getter]
     fn value(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         match self.kind {
-            Kind::Null => Ok(PyNone::get(py).as_any().clone().unbind()),
-            Kind::False | Kind::True => {
+            gjson::Kind::Null => Ok(PyNone::get(py).as_any().clone().unbind()),
+            gjson::Kind::False | gjson::Kind::True => {
                 Ok(self.parsed().bool().into_pyobject(py)?.as_any().clone().unbind())
             }
-            Kind::Number => {
+            gjson::Kind::Number => {
                 let s = self.raw_slice();
                 if s.contains('.') || s.contains('e') || s.contains('E') {
                     Ok(self.parsed().f64().into_pyobject(py)?.into_any().unbind())
@@ -149,8 +116,8 @@ impl JsonResult {
                     Ok(self.parsed().u64().into_pyobject(py)?.into_any().unbind())
                 }
             }
-            Kind::String => Ok(self.parsed().str().into_pyobject(py)?.into_any().unbind()),
-            Kind::Array => {
+            gjson::Kind::String => Ok(self.parsed().str().into_pyobject(py)?.into_any().unbind()),
+            gjson::Kind::Array => {
                 let list = PyList::empty(py);
                 let parsed = self.parsed();
                 let mut err: Option<PyErr> = None;
@@ -175,7 +142,7 @@ impl JsonResult {
                 }
                 Ok(list.into_any().unbind())
             }
-            Kind::Object => {
+            gjson::Kind::Object => {
                 let dict = PyDict::new(py);
                 let parsed = self.parsed();
                 let mut err: Option<PyErr> = None;
@@ -271,7 +238,7 @@ impl JsonResult {
     /// Other kinds raise `TypeError`.
     fn __contains__(&self, item: &str) -> PyResult<bool> {
         match self.kind {
-            Kind::Object => {
+            gjson::Kind::Object => {
                 let mut found = false;
                 self.parsed().each(|k, _v| {
                     if k.str() == item {
@@ -283,7 +250,7 @@ impl JsonResult {
                 });
                 Ok(found)
             }
-            Kind::Array => {
+            gjson::Kind::Array => {
                 let mut found = false;
                 self.parsed().each(|_k, v| {
                     if v.str() == item {
@@ -304,8 +271,8 @@ impl JsonResult {
     /// Number of elements: chars for String, elements for Array/Object.
     fn __len__(&self) -> PyResult<usize> {
         match self.kind {
-            Kind::String => Ok(self.parsed().str().chars().count()),
-            Kind::Array | Kind::Object => {
+            gjson::Kind::String => Ok(self.parsed().str().chars().count()),
+            gjson::Kind::Array | gjson::Kind::Object => {
                 let mut count = 0usize;
                 self.parsed().each(|_k, _v| {
                     count += 1;
@@ -320,9 +287,9 @@ impl JsonResult {
     /// Iterate: String → chars, Array → Results, Object → keys.
     fn __iter__(&self, py: Python<'_>) -> PyResult<Py<ValueIterator>> {
         let it = match self.kind {
-            Kind::String => ValueIterator::for_string_chars(self),
-            Kind::Array => ValueIterator::for_array_values(self),
-            Kind::Object => ValueIterator::for_object_keys(self),
+            gjson::Kind::String => ValueIterator::for_string_chars(self),
+            gjson::Kind::Array => ValueIterator::for_array_values(self),
+            gjson::Kind::Object => ValueIterator::for_object_keys(self),
             _ => {
                 return Err(PyTypeError::new_err(
                     "Result is not iterable (only String, Array, and Object are iterable)",
@@ -340,7 +307,7 @@ impl JsonResult {
     /// Null:   int → IndexError; slice → empty Result; str → TypeError
     fn __getitem__(&self, key: &Bound<'_, PyAny>, py: Python<'_>) -> PyResult<Py<PyAny>> {
         match self.kind {
-            Kind::String => {
+            gjson::Kind::String => {
                 if let Ok(slice) = key.cast::<PySlice>() {
                     let chars: Vec<char> = self.parsed().str().chars().collect();
                     let idx = slice.indices(chars.len() as isize)?;
@@ -366,7 +333,7 @@ impl JsonResult {
                     "string indices must be integers or slices, not str",
                 ))
             }
-            Kind::Array => {
+            gjson::Kind::Array => {
                 if let Ok(slice) = key.cast::<PySlice>() {
                     let mut children: Vec<JsonResult> = Vec::new();
                     self.parsed().each(|_k, v| {
@@ -382,7 +349,7 @@ impl JsonResult {
                         i += idx.step;
                     }
                     let json_array = format!("[{}]", parts.join(","));
-                    let result = JsonResult::from_owned_text(&json_array, Kind::Array, true);
+                    let result = JsonResult::from_owned_text(&json_array, gjson::Kind::Array, true);
                     return Ok(Py::new(py, result)?.into_any());
                 }
                 if let Ok(n) = key.extract::<isize>() {
@@ -403,16 +370,16 @@ impl JsonResult {
                     "list indices must be integers or slices, not str",
                 ))
             }
-            Kind::Object => {
+            gjson::Kind::Object => {
                 if let Ok(s) = key.extract::<String>() {
                     let result = JsonResult::child(&self.raw, self.parsed().get(&s));
                     return Ok(Py::new(py, result)?.into_any());
                 }
                 Err(PyKeyError::new_err(key.repr()?.to_string()))
             }
-            Kind::Null => {
+            gjson::Kind::Null => {
                 if key.cast::<PySlice>().is_ok() {
-                    let result = JsonResult::from_owned_text("", Kind::Null, false);
+                    let result = JsonResult::from_owned_text("", gjson::Kind::Null, false);
                     return Ok(Py::new(py, result)?.into_any());
                 }
                 if key.extract::<isize>().is_ok() {
@@ -427,7 +394,7 @@ impl JsonResult {
     /// Return a lazy view of the object's keys (similar to `dict.keys()`).
     /// Raises `TypeError` for non-Object values.
     fn keys(slf: PyRef<'_, Self>, py: Python<'_>) -> PyResult<Py<KeysView>> {
-        if !matches!(slf.kind, Kind::Object) {
+        if !matches!(slf.kind, gjson::Kind::Object) {
             return Err(PyTypeError::new_err(
                 "keys() is only available for Object values",
             ));
@@ -443,7 +410,7 @@ impl JsonResult {
     /// Return a lazy view of the object's values (similar to `dict.values()`).
     /// Raises `TypeError` for non-Object values.
     fn values(slf: PyRef<'_, Self>, py: Python<'_>) -> PyResult<Py<ValuesView>> {
-        if !matches!(slf.kind, Kind::Object) {
+        if !matches!(slf.kind, gjson::Kind::Object) {
             return Err(PyTypeError::new_err(
                 "values() is only available for Object values",
             ));
@@ -459,7 +426,7 @@ impl JsonResult {
     /// Return a lazy view of the object's `(key, value)` pairs.
     /// Raises `TypeError` for non-Object values.
     fn items(slf: PyRef<'_, Self>, py: Python<'_>) -> PyResult<Py<ItemsView>> {
-        if !matches!(slf.kind, Kind::Object) {
+        if !matches!(slf.kind, gjson::Kind::Object) {
             return Err(PyTypeError::new_err(
                 "items() is only available for Object values",
             ));
@@ -486,11 +453,11 @@ impl JsonResult {
 
     fn __bool__(&self) -> bool {
         match self.kind {
-            Kind::Null | Kind::False => false,
-            Kind::True => true,
-            Kind::Number => self.parsed().f64() != 0.0,
-            Kind::String => !self.parsed().str().is_empty(),
-            Kind::Array | Kind::Object => {
+            gjson::Kind::Null | gjson::Kind::False => false,
+            gjson::Kind::True => true,
+            gjson::Kind::Number => self.parsed().f64() != 0.0,
+            gjson::Kind::String => !self.parsed().str().is_empty(),
+            gjson::Kind::Array | gjson::Kind::Object => {
                 let mut has = false;
                 self.parsed().each(|_k, _v| {
                     has = true;
@@ -503,7 +470,7 @@ impl JsonResult {
 
     fn __repr__(&self) -> String {
         match self.kind {
-            Kind::Object => {
+            gjson::Kind::Object => {
                 let mut keys: Vec<String> = Vec::new();
                 self.parsed().each(|k, _v| {
                     keys.push(k.str().to_string());
@@ -521,7 +488,7 @@ impl JsonResult {
                 };
                 format!("<Result type=dict, keys={}>", display)
             }
-            Kind::Array => {
+            gjson::Kind::Array => {
                 let mut raws: Vec<String> = Vec::new();
                 self.parsed().each(|_k, v| {
                     raws.push(v.json().to_string());
@@ -534,11 +501,11 @@ impl JsonResult {
                 };
                 format!("<Result type=list, value={}>", display)
             }
-            Kind::Null => "None".to_string(),
-            Kind::False => "False".to_string(),
-            Kind::True => "True".to_string(),
-            Kind::Number => self.raw_slice().to_string(),
-            Kind::String => self.parsed().str().to_string(),
+            gjson::Kind::Null => "None".to_string(),
+            gjson::Kind::False => "False".to_string(),
+            gjson::Kind::True => "True".to_string(),
+            gjson::Kind::Number => self.raw_slice().to_string(),
+            gjson::Kind::String => self.parsed().str().to_string(),
         }
     }
 }
@@ -857,7 +824,6 @@ fn get_many_bytes(py: Python<'_>, json: &[u8], paths: Vec<String>) -> PyResult<V
 
 #[pymodule]
 fn _pygjson(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_class::<Kind>()?;
     m.add_class::<JsonResult>()?;
     m.add_class::<ValueIterator>()?;
     m.add_class::<KeysView>()?;
