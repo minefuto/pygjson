@@ -71,8 +71,14 @@ class Result:
     def get(self, path: str) -> "Result":
         """Get a child value at the given gjson path."""
 
+    def get_bytes(self, path: str) -> "Result":
+        """Get a child value at the given gjson path using byte-slice internally."""
+
     def get_many(self, paths: Sequence[str]) -> List["Result"]:
         """Get child values at each of the given gjson paths."""
+
+    def get_many_bytes(self, paths: Sequence[str]) -> List["Result"]:
+        """Get child values at each of the given gjson paths using byte-slice internally."""
 
     def to_list(self) -> List["Result"]:
         """Return the value as a list of :class:`Result` objects."""
@@ -111,8 +117,14 @@ class Result:
 def get(json: str, path: str) -> Result:
     """Get the value at ``path`` from the given JSON document."""
 
+def get_bytes(json: bytes, path: str) -> Result:
+    """Get the value at ``path`` from the given JSON bytes."""
+
 def get_many(json: str, paths: Sequence[str]) -> List[Result]:
     """Get the values at each path in ``paths`` from the given JSON document."""
+
+def get_many_bytes(json: bytes, paths: Sequence[str]) -> List[Result]:
+    """Get the values at each path in ``paths`` from the given JSON bytes."""
 
 def parse(json: str) -> Result:
     """Parse the entire JSON document into a :class:`Result`."""

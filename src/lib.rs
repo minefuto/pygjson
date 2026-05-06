@@ -1,4 +1,4 @@
-use pyo3::exceptions::PyTypeError;
+use pyo3::exceptions::{PyTypeError, PyUnicodeDecodeError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyDict, PyFloat, PyInt, PyList, PyNone, PyString, PyTuple};
 use std::sync::Arc;
@@ -252,6 +252,21 @@ impl JsonResult {
             .into_iter()
             .map(|v| JsonResult::child(&self.raw, v))
             .collect()
+    }
+
+    /// Get a child value at the given gjson path from the byte-slice representation.
+    fn get_bytes(&self, path: &str) -> JsonResult {
+        // SAFETY: raw_slice() is always valid UTF-8 (stored as Arc<str>)
+        let v = unsafe { gjson::get_bytes(self.raw_slice().as_bytes(), path) };
+        JsonResult::child(&self.raw, v)
+    }
+
+    /// Get child values at each of the given gjson paths from the byte-slice representation.
+    fn get_many_bytes(&self, paths: Vec<String>) -> Vec<JsonResult> {
+        let path_refs: Vec<&str> = paths.iter().map(String::as_str).collect();
+        // SAFETY: raw_slice() is always valid UTF-8 (stored as Arc<str>)
+        let vs = unsafe { gjson::get_many_bytes(self.raw_slice().as_bytes(), &path_refs) };
+        vs.into_iter().map(|v| JsonResult::child(&self.raw, v)).collect()
     }
 
     /// Return the value as a list of `Result` objects (empty for non-arrays).
@@ -721,6 +736,37 @@ fn get_many(json: &str, paths: Vec<String>) -> Vec<JsonResult> {
         .collect()
 }
 
+/// Get the value at `path` from the given JSON bytes.
+#[pyfunction]
+fn get_bytes(py: Python<'_>, json: &[u8], path: &str) -> PyResult<JsonResult> {
+    let s = std::str::from_utf8(json).map_err(|e| -> PyErr {
+        match PyUnicodeDecodeError::new_utf8(py, json, e) {
+            Ok(bound) => bound.into(),
+            Err(e) => e,
+        }
+    })?;
+    let raw: Arc<str> = Arc::from(s);
+    // SAFETY: raw was just validated as valid UTF-8
+    let v = unsafe { gjson::get_bytes(raw.as_bytes(), path) };
+    Ok(JsonResult::child(&raw, v))
+}
+
+/// Get the values at each path in `paths` from the given JSON bytes.
+#[pyfunction]
+fn get_many_bytes(py: Python<'_>, json: &[u8], paths: Vec<String>) -> PyResult<Vec<JsonResult>> {
+    let s = std::str::from_utf8(json).map_err(|e| -> PyErr {
+        match PyUnicodeDecodeError::new_utf8(py, json, e) {
+            Ok(bound) => bound.into(),
+            Err(e) => e,
+        }
+    })?;
+    let raw: Arc<str> = Arc::from(s);
+    let path_refs: Vec<&str> = paths.iter().map(String::as_str).collect();
+    // SAFETY: raw was just validated as valid UTF-8
+    let vs = unsafe { gjson::get_many_bytes(raw.as_bytes(), &path_refs) };
+    Ok(vs.into_iter().map(|v| JsonResult::child(&raw, v)).collect())
+}
+
 #[pymodule]
 fn _pygjson(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Kind>()?;
@@ -733,5 +779,7 @@ fn _pygjson(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(parse, m)?)?;
     m.add_function(wrap_pyfunction!(validate, m)?)?;
     m.add_function(wrap_pyfunction!(get_many, m)?)?;
+    m.add_function(wrap_pyfunction!(get_bytes, m)?)?;
+    m.add_function(wrap_pyfunction!(get_many_bytes, m)?)?;
     Ok(())
 }

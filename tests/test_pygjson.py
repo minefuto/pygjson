@@ -1,5 +1,6 @@
+import pytest
 import pygjson
-from pygjson import Result, get, get_many, parse, validate
+from pygjson import Result, get, get_bytes, get_many, get_many_bytes, parse, validate
 
 JSON = """{
   "name": {"first": "Tom", "last": "Anderson"},
@@ -342,3 +343,40 @@ def test_value_object():
     assert isinstance(v, dict)
     assert set(v.keys()) == {"first", "last"}
     assert str(v["first"]) == "Tom"
+
+
+# ---------------------------------------------------------------------------
+# get_bytes / get_many_bytes
+# ---------------------------------------------------------------------------
+
+def test_get_bytes_module_level():
+    assert str(get_bytes(JSON.encode(), "name.first")) == "Tom"
+    assert int(get_bytes(JSON.encode(), "age")) == 37
+
+
+def test_get_bytes_invalid_utf8():
+    with pytest.raises(UnicodeDecodeError):
+        get_bytes(b"\xff\xfe", "name")
+
+
+def test_get_many_bytes_module_level():
+    results = get_many_bytes(JSON.encode(), ["name.first", "age"])
+    assert str(results[0]) == "Tom"
+    assert int(results[1]) == 37
+
+
+def test_get_bytes_instance():
+    root = parse(JSON)
+    assert str(root.get_bytes("name.first")) == "Tom"
+
+
+def test_get_many_bytes_instance():
+    root = parse(JSON)
+    results = root.get_many_bytes(["name.first", "name.last"])
+    assert str(results[0]) == "Tom"
+    assert str(results[1]) == "Anderson"
+
+
+def test_get_bytes_exports():
+    assert pygjson.get_bytes is get_bytes
+    assert pygjson.get_many_bytes is get_many_bytes
