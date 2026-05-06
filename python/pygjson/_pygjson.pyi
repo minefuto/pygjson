@@ -65,9 +65,6 @@ class Result:
     def to_bool(self) -> bool:
         """Boolean value. Returns ``True`` only for the JSON literal ``true``."""
 
-    def json(self) -> str:
-        """Raw JSON text for this value."""
-
     def get(self, path: str) -> "Result":
         """Get a child value at the given gjson path."""
 
@@ -79,12 +76,6 @@ class Result:
 
     def get_many_bytes(self, paths: Sequence[str]) -> List["Result"]:
         """Get child values at each of the given gjson paths using byte-slice internally."""
-
-    def to_list(self) -> List["Result"]:
-        """Return the value as a list of :class:`Result` objects."""
-
-    def to_dict(self) -> Dict[str, "Result"]:
-        """Return the value as a ``dict[str, Result]``."""
 
     def keys(self) -> KeysView:
         """Return a lazy view of the object's keys.
@@ -112,7 +103,6 @@ class Result:
     def __float__(self) -> float: ...
     def __bool__(self) -> bool: ...
     def __repr__(self) -> str: ...
-    def __str__(self) -> str: ...
 
 def get(json: str, path: str) -> Result:
     """Get the value at ``path`` from the given JSON document."""

@@ -235,11 +235,6 @@ impl JsonResult {
         self.parsed().bool()
     }
 
-    /// Raw JSON text for this value.
-    fn json(&self) -> String {
-        self.raw_slice().to_string()
-    }
-
     /// Get a child value at the given gjson path.
     fn get(&self, path: &str) -> JsonResult {
         JsonResult::child(&self.raw, self.parsed().get(path))
@@ -267,41 +262,6 @@ impl JsonResult {
         // SAFETY: raw_slice() is always valid UTF-8 (stored as Arc<str>)
         let vs = unsafe { gjson::get_many_bytes(self.raw_slice().as_bytes(), &path_refs) };
         vs.into_iter().map(|v| JsonResult::child(&self.raw, v)).collect()
-    }
-
-    /// Return the value as a list of `Result` objects (empty for non-arrays).
-    fn to_list(&self) -> Vec<JsonResult> {
-        let mut out = Vec::new();
-        let parsed = self.parsed();
-        parsed.each(|_k, v| {
-            out.push(JsonResult::child(&self.raw, v));
-            true
-        });
-        out
-    }
-
-    /// Return the value as a `dict[str, Result]` (empty for non-objects).
-    fn to_dict<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
-        let dict = PyDict::new(py);
-        if matches!(self.kind, Kind::Object) {
-            let parsed = self.parsed();
-            let mut err: Option<PyErr> = None;
-            parsed.each(|k, v| {
-                let key = k.str().to_string();
-                let child = JsonResult::child(&self.raw, v);
-                match dict.set_item(key, child) {
-                    Ok(()) => true,
-                    Err(e) => {
-                        err = Some(e);
-                        false
-                    }
-                }
-            });
-            if let Some(e) = err {
-                return Err(e);
-            }
-        }
-        Ok(dict)
     }
 
     /// Membership test: `item in value`.
@@ -525,15 +485,61 @@ impl JsonResult {
     }
 
     fn __bool__(&self) -> bool {
-        self.exists
+        match self.kind {
+            Kind::Null | Kind::False => false,
+            Kind::True => true,
+            Kind::Number => self.parsed().f64() != 0.0,
+            Kind::String => !self.parsed().str().is_empty(),
+            Kind::Array | Kind::Object => {
+                let mut has = false;
+                self.parsed().each(|_k, _v| {
+                    has = true;
+                    false
+                });
+                has
+            }
+        }
     }
 
     fn __repr__(&self) -> String {
-        format!("Result({})", self.raw_slice())
-    }
-
-    fn __str__(&self) -> String {
-        self.parsed().str().to_string()
+        match self.kind {
+            Kind::Object => {
+                let mut keys: Vec<String> = Vec::new();
+                self.parsed().each(|k, _v| {
+                    keys.push(k.str().to_string());
+                    true
+                });
+                let display = if keys.len() >= 3 {
+                    format!(
+                        "[{}, {}, ...]",
+                        format!("{:?}", keys[0]),
+                        format!("{:?}", keys[1])
+                    )
+                } else {
+                    let parts: Vec<String> = keys.iter().map(|k| format!("{:?}", k)).collect();
+                    format!("[{}]", parts.join(", "))
+                };
+                format!("<Result type=dict, keys={}>", display)
+            }
+            Kind::Array => {
+                let mut raws: Vec<String> = Vec::new();
+                self.parsed().each(|_k, v| {
+                    raws.push(v.json().to_string());
+                    true
+                });
+                let display = if raws.len() >= 3 {
+                    format!("[{}, {}, ...]", raws[0], raws[1])
+                } else {
+                    format!("[{}]", raws.join(", "))
+                };
+                format!("<Result type=list, value={}>", display)
+            }
+            Kind::Null => "None".to_string(),
+            Kind::False => "False".to_string(),
+            Kind::True => "True".to_string(),
+            Kind::Number => self.raw_slice().to_string(),
+            Kind::String => self.parsed().str().to_string(),
+        }
     }
 }
 

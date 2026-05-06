@@ -32,7 +32,7 @@ def test_query_filter():
     assert str(get(JSON, 'friends.#(last="Murphy").first')) == "Dale"
     all_murphys = get(JSON, 'friends.#(last="Murphy")#.first')
     assert all_murphys.type_ == list
-    assert [str(v) for v in all_murphys.to_list()] == ["Dale", "Jane"]
+    assert [str(v) for v in all_murphys] == ["Dale", "Jane"]
 
 
 def test_type_and_exists():
@@ -47,13 +47,12 @@ def test_type_and_exists():
 def test_array_iteration():
     nets = get(JSON, "friends.0.nets")
     assert nets.type_ == list
-    assert [str(n) for n in nets.to_list()] == ["ig", "fb", "tw"]
     assert [str(n) for n in nets] == ["ig", "fb", "tw"]
 
 
 def test_to_dict_object():
     name = get(JSON, "name")
-    m = name.to_dict()
+    m = dict(name.items())
     assert set(m.keys()) == {"first", "last"}
     assert isinstance(m["first"], Result)
     assert str(m["first"]) == "Tom"
@@ -165,13 +164,39 @@ def test_validate():
 
 def test_modifier_reverse():
     rev = get(JSON, "children|@reverse")
-    assert [str(v) for v in rev.to_list()] == ["Jack", "Alex", "Sara"]
+    assert [str(v) for v in rev] == ["Jack", "Alex", "Sara"]
 
 
-def test_repr_and_json():
-    v = get(JSON, "name")
-    assert v.json().startswith("{")
-    assert "Result(" in repr(v)
+def test_repr():
+    # Object: show up to 2 keys
+    name = get(JSON, "name")
+    assert repr(name) == '<Result type=dict, keys=["first", "last"]>'
+
+    # Object with 3+ keys: truncate with ...
+    friends0 = get(JSON, "friends.0")
+    r = repr(friends0)
+    assert r.startswith("<Result type=dict")
+    assert "..." in r
+
+    # Array: show up to 2 raw values
+    children = get(JSON, "children")
+    r = repr(children)
+    assert r.startswith("<Result type=list")
+    assert '"Sara"' in r
+    assert "..." in r
+
+    # Number
+    assert repr(get(JSON, "age")) == "37"
+
+    # String
+    assert repr(get(JSON, "name.first")) == "Tom"
+
+    # Bool
+    assert repr(get('{"flag": true}', "flag")) == "True"
+    assert repr(get('{"flag": false}', "flag")) == "False"
+
+    # Null
+    assert repr(get('{"key": null}', "key")) == "None"
 
 
 def test_module_exports():
@@ -380,6 +405,43 @@ def test_get_many_bytes_instance():
 def test_get_bytes_exports():
     assert pygjson.get_bytes is get_bytes
     assert pygjson.get_many_bytes is get_many_bytes
+
+
+# ---------------------------------------------------------------------------
+# __bool__ (bool(result.value) semantics)
+# ---------------------------------------------------------------------------
+
+def test_dunder_bool_null():
+    assert not bool(get('{"x": null}', "x"))
+    assert not bool(get(JSON, "no.such.path"))  # missing → Null → false
+
+
+def test_dunder_bool_bool_values():
+    assert not bool(get('{"x": false}', "x"))
+    assert bool(get('{"x": true}', "x"))
+
+
+def test_dunder_bool_number():
+    assert bool(get('{"x": 1}', "x"))
+    assert bool(get('{"x": -1}', "x"))
+    assert not bool(get('{"x": 0}', "x"))
+    assert not bool(get('{"x": 0.0}', "x"))
+    assert bool(get('{"x": 3.14}', "x"))
+
+
+def test_dunder_bool_string():
+    assert bool(get('{"x": "hello"}', "x"))
+    assert not bool(get('{"x": ""}', "x"))
+
+
+def test_dunder_bool_array():
+    assert bool(get('{"x": [1]}', "x"))
+    assert not bool(get('{"x": []}', "x"))
+
+
+def test_dunder_bool_object():
+    assert bool(get('{"x": {"a": 1}}', "x"))
+    assert not bool(get('{"x": {}}', "x"))
 
 
 # ---------------------------------------------------------------------------
