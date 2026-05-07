@@ -36,7 +36,7 @@ int(pygjson.get(JSON, "children.#"))                         # 3
 str(pygjson.get(JSON, "children.1"))                          # 'Alex'
 str(pygjson.get(JSON, 'friends.#(last="Murphy").first'))      # 'Dale'
 
-[str(v) for v in pygjson.get(JSON, "children|@reverse")]
+[str(r) for r in pygjson.get(JSON, "children|@reverse")]
 # ['Jack', 'Alex', 'Sara']
 
 pygjson.validate(JSON)  # True
@@ -59,79 +59,64 @@ pygjson.validate(JSON)  # True
 
 ### Result
 
-`get` and `parse` return a `Result`. The API is split into two layers:
+`get` and `parse` return a `Result`. Result accessors
 
 **Properties**
 
 | Property    | Description                                                                      |
 |-------------|----------------------------------------------------------------------------------|
-| `v.type_`   | Python type for this value: `None`, `bool`, `int`, `float`, `str`, `list`, `dict` |
-| `v.value`   | Value converted to the corresponding Python type                                 |
+| `r.type_`   | Python type for this value: `None`, `bool`, `int`, `float`, `str`, `list`, `dict` |
+| `r.value`   | Value converted to the corresponding Python type: `None` / `int` / `float` / `str` / `list[Result]` / `dict[str, Result]`                                  |
 
 **gjson-native methods** — mirror the Rust `gjson::Value` API:
 
 | Method                   | Description                                               |
 |--------------------------|-----------------------------------------------------------|
-| `v.exists()`             | `True` if the value was found in the JSON                 |
-| `v.to_str()`             | String representation (gjson `str` behaviour)             |
-| `v.to_int()`             | Integer (`i64` for negative, `u64` for non-negative)      |
-| `v.to_float()`           | 64-bit float                                              |
-| `v.to_bool()`            | `True` only for the JSON literal `true`                   |
-| `v.get(path)`            | Sub-query relative to this value                          |
-| `v.get_many(paths)`      | Sub-query at multiple paths; returns `list[Result]`       |
+| `r.exists()`             | `True` if the value was found in the JSON                 |
+| `r.to_str()`             | String representation (gjson `str` behaviour)             |
+| `r.to_int()`             | Integer (`i64` for negative, `u64` for non-negative)      |
+| `r.to_float()`           | 64-bit float                                              |
+| `r.to_bool()`            | `True` only for the JSON literal `true`                   |
+| `r.get(path)`            | Sub-query relative to this value                          |
+| `r.get_many(paths)`      | Sub-query at multiple paths; returns `list[Result]`       |
 
 **Pythonic methods** — follow standard Python protocols:
 
 | Syntax              | Description                                                                   |
 |---------------------|-------------------------------------------------------------------------------|
-| `str(v)`,`repr(v)`  | dict: `<Result type=dict, keys=[...]>`; list: `<Result type=list, value=[...]>`; others: `str(v.value)` |
-| `int(v)`            | Integer (negative → `i64`, non-negative → `u64`)                              |
-| `float(v)`          | 64-bit float                                                                  |
-| `bool(v)`           | Equivalent to `bool(v.value)` — `False` for null/false/0/""/[]/{}            |
-| `len(v)`            | Chars for String; element count for Array/Object                              |
-| `v[key]`            | Subscript access — see table below                                            |
-| `key in v`          | Key membership for Object; string match for Array elements                    |
-| `iter(v)`           | Lazy iterator: chars for String; `Result`s for Array; keys for Object         |
-| `v.keys()`          | Lazy `KeysView` of object keys (raises `TypeError` for non-Object)            |
-| `v.values()`        | Lazy `ValuesView` of object values (raises `TypeError` for non-Object)        |
-| `v.items()`         | Lazy `ItemsView` of `(key, Result)` pairs (raises `TypeError` for non-Object) |
+| `str(r)`,`repr(r)`  | dict: `<Result type=dict, keys=[...]>`; list: `<Result type=list, value=[...]>`; others: `str(r.value)` |
+| `int(r)`            | Integer (negative → `i64`, non-negative → `u64`)                              |
+| `float(r)`          | 64-bit float                                                                  |
+| `bool(r)`           | Equivalent to `bool(r.value)` — `False` for null/false/0/""/[]/{}            |
+| `len(r)`            | Chars for String; element count for Array/Object                              |
+| `r[key]`            | Subscript access                                                              |
+| `key in r`          | Key membership for Object; string match for Array elements                    |
+| `iter(r)`           | Lazy iterator: chars for String; `Result`s for Array; keys for Object         |
+| `r.keys()`          | Lazy `KeysView` of object keys (raises `TypeError` for non-Object)            |
+| `r.values()`        | Lazy `ValuesView` of object values (raises `TypeError` for non-Object)        |
+| `r.items()`         | Lazy `ItemsView` of `(key, Result)` pairs (raises `TypeError` for non-Object) |
 
-#### Subscript access `v[key]`
-
-| Value type | `key` type | Result                                     |
-|------------|------------|--------------------------------------------|
-| String     | `int`      | Nth code point as `str` (negative indexing supported) |
-| String     | `slice`    | Substring as `str`                         |
-| String     | `str`      | `TypeError`                                |
-| Array      | `int`      | `Result` at that index (negative indexing supported) |
-| Array      | `slice`    | New `Result` of type Array with selected elements |
-| Array      | `str`      | `TypeError`                                |
-| Object     | `str`      | `Result` at that key                       |
-| Object     | `int`/`slice` | `KeyError`                              |
-| Null       | `int`      | `IndexError`                               |
-| Null       | `slice`    | Empty `Result` (`exists()` is `False`)     |
-| Null       | `str`      | `TypeError`                                |
 
 #### Lazy iteration
 
-`iter(v)`, `v.keys()`, `v.values()` and `v.items()` all return lightweight
+`iter(r)`, `r.keys()`, `r.values()` and `r.items()` all return lightweight
 lazy objects rather than fully-materialised lists, mirroring Python's built-in
 `dict_keys` / `dict_values` / `dict_items`.
 
 ```python
-v = parse('{"a": 1, "b": 2, "c": 3}')
+r = parse('{"a": 1, "b": 2, "c": 3}')
 
-ks = v.keys()           # KeysView — no materialisation yet
+ks = r.keys()           # KeysView — no materialisation yet
 len(ks)                 # 3
 "a" in ks               # True
 list(ks)                # ['a', 'b', 'c']
 
-for k, child in v.items():   # ItemsView, lazily yields one pair at a time
+for k, child in r.items():   # ItemsView, lazily yields one pair at a time
     ...
 ```
 
 If you need a fully materialised collection, wrap the view with `list(...)` or
-`dict(...)` explicitly, or use `v.value` to get a native Python object.
+`dict(...)` explicitly, or use `r.value` to get a native Python object.
 
 ## Usage examples
 
@@ -139,9 +124,9 @@ If you need a fully materialised collection, wrap the view with `list(...)` or
 from pygjson import get, get_bytes, get_many, get_many_bytes, parse, validate
 
 # Missing value returns Result(exists=False)
-v = get(JSON, "no.such.path")
-v.exists()   # False
-bool(v)      # False (null → bool(None) = False)
+r = get(JSON, "no.such.path")
+r.exists()   # False
+bool(r)      # False (null → bool(None) = False)
 
 # Type conversion
 age = get(JSON, "age")
@@ -161,11 +146,11 @@ get_bytes(JSON.encode(), "name.first")    # Result("Tom")
 # Array iteration and subscript
 children = get(JSON, "children")
 list(children)                  # [Result("Sara"), Result("Alex"), Result("Jack")]
-[str(v) for v in children]      # ['Sara', 'Alex', 'Jack']
+[str(r) for r in children]      # ['Sara', 'Alex', 'Jack']
 "Sara" in children              # True
 str(children[0])                # 'Sara'
 str(children[-1])               # 'Jack'
-[str(v) for v in children[1:]] # ['Alex', 'Jack']
+[str(r) for r in children[1:]] # ['Alex', 'Jack']
 
 # String subscript
 first = get(JSON, "name.first")   # "Tom"
