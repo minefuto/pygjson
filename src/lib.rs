@@ -475,15 +475,16 @@ impl JsonResult {
                 format!("<Result type=dict, keys={}>", display)
             }
             gjson::Kind::Array => {
-                let mut raws: Vec<String> = Vec::new();
+                let mut reprs: Vec<String> = Vec::new();
                 self.parsed().each(|_k, v| {
-                    raws.push(v.json().to_string());
+                    let child = JsonResult::child(&self.raw, v);
+                    reprs.push(child.__repr__());
                     true
                 });
-                let display = if raws.len() >= 3 {
-                    format!("[{}, {}, ...]", raws[0], raws[1])
+                let display = if reprs.len() >= 3 {
+                    format!("[{}, {}, ...]", reprs[0], reprs[1])
                 } else {
-                    format!("[{}]", raws.join(", "))
+                    format!("[{}]", reprs.join(", "))
                 };
                 format!("<Result type=list, value={}>", display)
             }

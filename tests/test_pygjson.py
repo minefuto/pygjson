@@ -178,11 +178,11 @@ def test_repr():
     assert r.startswith("<Result type=dict")
     assert "..." in r
 
-    # Array: show up to 2 raw values
+    # Array: show up to 2 child Result reprs
     children = get(JSON, "children")
     r = repr(children)
     assert r.startswith("<Result type=list")
-    assert '"Sara"' in r
+    assert "Sara" in r
     assert "..." in r
 
     # Number
