@@ -110,8 +110,8 @@ def get_many(json: str, paths: Sequence[str]) -> List[Result]:
 def get_many_bytes(json: bytes, paths: Sequence[str]) -> List[Result]:
     """Get the values at each path in ``paths`` from the given JSON bytes."""
 
-def parse(json: str) -> Result:
+def parse(json: Union[str, bytes]) -> Result:
     """Parse the entire JSON document into a :class:`Result`."""
 
-def validate(json: str) -> bool:
+def validate(json: Union[str, bytes]) -> bool:
     """Validate whether ``json`` is a syntactically valid JSON document."""

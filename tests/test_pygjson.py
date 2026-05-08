@@ -395,6 +395,24 @@ def test_get_bytes_exports():
     assert pygjson.get_many_bytes is get_many_bytes
 
 
+def test_parse_bytes():
+    root = parse(JSON.encode())
+    assert str(root.get("name.first")) == "Tom"
+    assert int(root.get("age")) == 37
+    assert root.type_ == dict
+
+
+def test_parse_bytes_invalid_utf8():
+    with pytest.raises(UnicodeDecodeError):
+        parse(b"\xff\xfe")
+
+
+def test_validate_bytes():
+    assert validate(JSON.encode())
+    assert validate(b"[1,2,3]")
+    assert not validate(b"{not json")
+
+
 def test_kind_not_exported():
     import pygjson._pygjson as m
     assert not hasattr(m, "Kind")

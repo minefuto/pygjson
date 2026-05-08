@@ -755,16 +755,37 @@ fn get(json: &str, path: &str) -> JsonResult {
 
 /// Parse the entire JSON document into a `Result`.
 #[pyfunction]
-fn parse(json: &str) -> JsonResult {
-    let raw: Arc<str> = Arc::from(json);
-    let parsed = gjson::parse(&raw);
-    JsonResult::child(&raw, parsed)
+fn parse(py: Python<'_>, json: &Bound<'_, PyAny>) -> PyResult<JsonResult> {
+    if let Ok(s) = json.extract::<&str>() {
+        let raw: Arc<str> = Arc::from(s);
+        let parsed = gjson::parse(&raw);
+        Ok(JsonResult::child(&raw, parsed))
+    } else if let Ok(b) = json.extract::<&[u8]>() {
+        let s = std::str::from_utf8(b).map_err(|e| -> PyErr {
+            match PyUnicodeDecodeError::new_utf8(py, b, e) {
+                Ok(bound) => bound.into(),
+                Err(e) => e,
+            }
+        })?;
+        let raw: Arc<str> = Arc::from(s);
+        // SAFETY: raw was just validated as valid UTF-8
+        let parsed = unsafe { gjson::parse_bytes(raw.as_bytes()) };
+        Ok(JsonResult::child(&raw, parsed))
+    } else {
+        Err(PyTypeError::new_err("json must be str or bytes"))
+    }
 }
 
 /// Validate whether `json` is a syntactically valid JSON document.
 #[pyfunction]
-fn validate(json: &str) -> bool {
-    gjson::valid(json)
+fn validate(json: &Bound<'_, PyAny>) -> PyResult<bool> {
+    if let Ok(s) = json.extract::<&str>() {
+        Ok(gjson::valid(s))
+    } else if let Ok(b) = json.extract::<&[u8]>() {
+        Ok(gjson::valid_bytes(b))
+    } else {
+        Err(PyTypeError::new_err("json must be str or bytes"))
+    }
 }
 
 /// Get the values at each path in `paths` from the given JSON document.
