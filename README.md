@@ -40,6 +40,9 @@ str(pygjson.get(JSON, 'friends.#(last="Murphy").first'))      # 'Dale'
 # ['Jack', 'Alex', 'Sara']
 
 pygjson.validate(JSON)  # True
+
+p = pygjson.compile("name.first")
+str(pygjson.get(JSON, p))  # 'Tom'  — reuse the compiled path
 ```
 
 ## API
@@ -54,8 +57,19 @@ pygjson.validate(JSON)  # True
 | `get_many_bytes(json, paths)`   | Query `json` (bytes) at each path; returns `list[Result]`|
 | `parse(json)`                   | Parse the entire JSON document into a `Result`           |
 | `validate(json)`                | `True` if `json` is syntactically valid                  |
+| `compile(path)`                 | Pre-compile a path string into a `Path`; returns `Path`  |
 
 `get_bytes` and `get_many_bytes` raise `UnicodeDecodeError` if `json` is not valid UTF-8.
+
+All query functions (`get`, `get_bytes`, `get_many`, `get_many_bytes`) and `Result.get` / `Result.get_many` accept either a plain `str` or a compiled `Path` as the path argument.
+
+### Path
+
+`compile(path)` parses a path string once and returns a `Path` object that can be reused across multiple queries. Pass a `Path` anywhere a path string is accepted.
+
+| Property / Method | Description                              |
+|-------------------|------------------------------------------|
+| `repr(p)`         | `Path("name.first")` — shows the path   |
 
 ### Result
 
@@ -121,7 +135,7 @@ If you need a fully materialised collection, wrap the view with `list(...)` or
 ## Usage examples
 
 ```python
-from pygjson import get, get_bytes, get_many, get_many_bytes, parse, validate
+from pygjson import compile, get, get_bytes, get_many, get_many_bytes, parse, validate
 
 # Missing value returns Result(exists=False)
 r = get(JSON, "no.such.path")
@@ -191,6 +205,23 @@ get_many_bytes(JSON.encode(), ["name.first", "age"])
 
 # Result.get_many for sub-queries relative to a parsed document
 parse(JSON).get_many(["name.first", "name.last"])
+# [Result(Tom), Result(Anderson)]
+
+# Pre-compile a path for reuse across multiple queries
+p = compile("name.first")
+get(JSON, p)                    # Result(Tom)
+get_bytes(JSON.encode(), p)     # Result(Tom)
+
+# Compiled paths work with get_many / get_many_bytes
+paths = [compile("name.first"), compile("age"), compile("children.1")]
+get_many(JSON, paths)
+# [Result(Tom), Result(37), Result(Alex)]
+
+# Compiled paths work with Result.get / Result.get_many
+root = parse(JSON)
+root.get(compile("name.first"))
+# Result(Tom)
+root.get_many([compile("name.first"), compile("name.last")])
 # [Result(Tom), Result(Anderson)]
 ```
 
