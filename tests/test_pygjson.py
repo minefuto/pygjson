@@ -1,6 +1,6 @@
 import pytest
 import pygjson
-from pygjson import Result, get, get_bytes, get_many, get_many_bytes, parse, validate
+from pygjson import Path, Result, compile, get, get_bytes, get_many, get_many_bytes, parse, validate
 
 JSON = """{
   "name": {"first": "Tom", "last": "Anderson"},
@@ -573,3 +573,75 @@ def test_getitem_number_raises():
     age = get(JSON, "age")
     with pytest.raises(TypeError):
         _ = age[0]
+
+
+# ---------------------------------------------------------------------------
+# compile / Path
+# ---------------------------------------------------------------------------
+
+def test_compile_returns_path():
+    p = compile("name.first")
+    assert isinstance(p, Path)
+
+
+def test_compile_repr():
+    assert repr(compile("name.first")) == 'Path("name.first")'
+
+
+def test_compile_export():
+    assert pygjson.compile is compile
+    assert pygjson.Path is Path
+
+
+def test_get_with_compiled_path():
+    p = compile("name.first")
+    assert str(get(JSON, p)) == "Tom"
+
+
+def test_get_bytes_with_compiled_path():
+    p = compile("name.first")
+    assert str(get_bytes(JSON.encode(), p)) == "Tom"
+
+
+def test_get_many_with_compiled_paths():
+    paths = [compile("name.first"), compile("age"), compile("children.1")]
+    results = get_many(JSON, paths)
+    assert len(results) == 3
+    assert str(results[0]) == "Tom"
+    assert int(results[1]) == 37
+    assert str(results[2]) == "Alex"
+
+
+def test_get_many_bytes_with_compiled_paths():
+    paths = [compile("name.first"), compile("age")]
+    results = get_many_bytes(JSON.encode(), paths)
+    assert str(results[0]) == "Tom"
+    assert int(results[1]) == 37
+
+
+def test_result_get_with_compiled_path():
+    root = parse(JSON)
+    p = compile("name.first")
+    assert str(root.get(p)) == "Tom"
+
+
+def test_result_get_many_with_compiled_paths():
+    root = parse(JSON)
+    paths = [compile("name.first"), compile("name.last")]
+    results = root.get_many(paths)
+    assert str(results[0]) == "Tom"
+    assert str(results[1]) == "Anderson"
+
+
+def test_compiled_path_cache_reuse():
+    p = compile("name.first")
+    assert str(get(JSON, p)) == "Tom"
+    assert str(get(JSON, p)) == "Tom"
+
+
+def test_compiled_path_cache_correctness():
+    p1 = compile("name.first")
+    assert str(get_many(JSON, [p1])[0]) == "Tom"
+    del p1
+    p2 = compile("age")
+    assert int(get_many(JSON, [p2])[0]) == 37

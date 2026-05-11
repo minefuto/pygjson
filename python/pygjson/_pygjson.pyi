@@ -2,6 +2,11 @@
 
 from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple, Union
 
+class Path:
+    """A pre-compiled gjson path, ready to be passed to :func:`get` / :func:`get_many`."""
+
+    def __repr__(self) -> str: ...
+
 class ValueIterator:
     """Lazy iterator over a :class:`Result`'s children."""
 
@@ -65,10 +70,10 @@ class Result:
     def to_bool(self) -> bool:
         """Boolean value. Returns ``True`` only for the JSON literal ``true``."""
 
-    def get(self, path: str) -> "Result":
+    def get(self, path: Union[str, Path]) -> "Result":
         """Get a child value at the given gjson path."""
 
-    def get_many(self, paths: Sequence[str]) -> List["Result"]:
+    def get_many(self, paths: Union[Sequence[str], Sequence[Path]]) -> List["Result"]:
         """Get child values at each of the given gjson paths."""
 
     def keys(self) -> KeysView:
@@ -98,16 +103,24 @@ class Result:
     def __bool__(self) -> bool: ...
     def __repr__(self) -> str: ...
 
-def get(json: str, path: str) -> Result:
+def compile(path: str) -> Path:
+    """Pre-compile a gjson path string for repeated use.
+
+    Pass the returned :class:`Path` to :func:`get`, :func:`get_bytes`,
+    :func:`get_many`, or :func:`get_many_bytes` instead of a plain string
+    to avoid per-call path parsing overhead.
+    """
+
+def get(json: str, path: Union[str, Path]) -> Result:
     """Get the value at ``path`` from the given JSON document."""
 
-def get_bytes(json: bytes, path: str) -> Result:
+def get_bytes(json: bytes, path: Union[str, Path]) -> Result:
     """Get the value at ``path`` from the given JSON bytes."""
 
-def get_many(json: str, paths: Sequence[str]) -> List[Result]:
+def get_many(json: str, paths: Union[Sequence[str], Sequence[Path]]) -> List[Result]:
     """Get the values at each path in ``paths`` from the given JSON document."""
 
-def get_many_bytes(json: bytes, paths: Sequence[str]) -> List[Result]:
+def get_many_bytes(json: bytes, paths: Union[Sequence[str], Sequence[Path]]) -> List[Result]:
     """Get the values at each path in ``paths`` from the given JSON bytes."""
 
 def parse(json: Union[str, bytes]) -> Result:

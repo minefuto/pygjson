@@ -6,22 +6,21 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 thread_local! {
-    static TRIE_CACHE: RefCell<HashMap<Vec<usize>, Arc<gjson::CompiledPaths>>> =
+    static TRIE_CACHE: RefCell<HashMap<Vec<String>, Arc<gjson::CompiledPaths>>> =
         RefCell::new(HashMap::new());
 }
 
 fn get_or_build_compiled(list: &Bound<'_, PyList>) -> Arc<gjson::CompiledPaths> {
-    let key: Vec<usize> = list.iter().map(|item| item.as_ptr() as usize).collect();
+    let key: Vec<String> = list
+        .iter()
+        .map(|item| item.cast::<Path>().unwrap().borrow().path.clone())
+        .collect();
     TRIE_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
         if let Some(c) = cache.get(&key) {
             return Arc::clone(c);
         }
-        let paths: Vec<String> = list
-            .iter()
-            .map(|item| item.cast::<CompiledPath>().unwrap().borrow().path.clone())
-            .collect();
-        let path_refs: Vec<&str> = paths.iter().map(String::as_str).collect();
+        let path_refs: Vec<&str> = key.iter().map(String::as_str).collect();
         let c = Arc::new(gjson::compile_paths(&path_refs));
         cache.insert(key, Arc::clone(&c));
         c
@@ -29,15 +28,15 @@ fn get_or_build_compiled(list: &Bound<'_, PyList>) -> Arc<gjson::CompiledPaths> 
 }
 
 /// A pre-compiled gjson path, ready to be passed to `get` / `get_many`.
-#[pyclass(module = "pygjson._pygjson", name = "CompiledPath")]
-pub struct CompiledPath {
+#[pyclass(module = "pygjson._pygjson", name = "Path")]
+pub struct Path {
     path: String,
 }
 
 #[pymethods]
-impl CompiledPath {
+impl Path {
     fn __repr__(&self) -> String {
-        format!("CompiledPath({:?})", self.path)
+        format!("Path({:?})", self.path)
     }
 }
 
@@ -241,9 +240,9 @@ impl JsonResult {
     }
 
     /// Get a child value at the given gjson path.
-    /// Accepts either a `str` or a `CompiledPath`.
+    /// Accepts either a `str` or a `Path`.
     fn get(&self, path: &Bound<'_, PyAny>) -> PyResult<JsonResult> {
-        if let Ok(cp) = path.cast::<CompiledPath>() {
+        if let Ok(cp) = path.cast::<Path>() {
             let borrow = cp.borrow();
             // SAFETY: raw_slice() is always valid UTF-8 (stored as Arc<str>)
             let v = unsafe { gjson::get_bytes(self.raw_slice().as_bytes(), &borrow.path) };
@@ -256,12 +255,12 @@ impl JsonResult {
     }
 
     /// Get child values at each of the given gjson paths.
-    /// Accepts either a `list[str]` or a `list[CompiledPath]`.
-    /// When `list[CompiledPath]` is passed, the internal trie is cached and
+    /// Accepts either a `list[str]` or a `list[Path]`.
+    /// When `list[Path]` is passed, the internal trie is cached and
     /// reused across calls with the same compiled path objects.
     fn get_many(&self, paths: &Bound<'_, PyAny>) -> PyResult<Vec<JsonResult>> {
         let list = paths.cast::<PyList>()?;
-        if !list.is_empty() && list.get_item(0)?.cast::<CompiledPath>().is_ok() {
+        if !list.is_empty() && list.get_item(0)?.cast::<Path>().is_ok() {
             let compiled = get_or_build_compiled(&list);
             // SAFETY: raw_slice() is always valid UTF-8 (stored as Arc<str>)
             let vs = unsafe {
@@ -805,11 +804,11 @@ impl ItemsView {
 // ---------------------------------------------------------------------------
 
 /// Get the value at `path` from the given JSON document.
-/// `path` accepts either a `str` or a `CompiledPath`.
+/// `path` accepts either a `str` or a `Path`.
 #[pyfunction]
 fn get(json: &str, path: &Bound<'_, PyAny>) -> PyResult<JsonResult> {
     let raw: Arc<str> = Arc::from(json);
-    if let Ok(cp) = path.cast::<CompiledPath>() {
+    if let Ok(cp) = path.cast::<Path>() {
         let borrow = cp.borrow();
         let parsed = gjson::get(&raw, &borrow.path);
         return Ok(JsonResult::child(&raw, parsed));
@@ -855,12 +854,12 @@ fn validate(json: &Bound<'_, PyAny>) -> PyResult<bool> {
 }
 
 /// Get the values at each path in `paths` from the given JSON document.
-/// `paths` accepts either a `list[str]` or a `list[CompiledPath]`.
+/// `paths` accepts either a `list[str]` or a `list[Path]`.
 #[pyfunction]
 fn get_many(json: &str, paths: &Bound<'_, PyAny>) -> PyResult<Vec<JsonResult>> {
     let raw: Arc<str> = Arc::from(json);
     let list = paths.cast::<PyList>()?;
-    if !list.is_empty() && list.get_item(0)?.cast::<CompiledPath>().is_ok() {
+    if !list.is_empty() && list.get_item(0)?.cast::<Path>().is_ok() {
         let compiled = get_or_build_compiled(&list);
         let vs = gjson::get_many_compiled(&raw, &compiled);
         return Ok(vs.into_iter().map(|v| JsonResult::child(&raw, v)).collect());
@@ -874,7 +873,7 @@ fn get_many(json: &str, paths: &Bound<'_, PyAny>) -> PyResult<Vec<JsonResult>> {
 }
 
 /// Get the value at `path` from the given JSON bytes.
-/// `path` accepts either a `str` or a `CompiledPath`.
+/// `path` accepts either a `str` or a `Path`.
 #[pyfunction]
 fn get_bytes(py: Python<'_>, json: &[u8], path: &Bound<'_, PyAny>) -> PyResult<JsonResult> {
     let s = std::str::from_utf8(json).map_err(|e| -> PyErr {
@@ -884,7 +883,7 @@ fn get_bytes(py: Python<'_>, json: &[u8], path: &Bound<'_, PyAny>) -> PyResult<J
         }
     })?;
     let raw: Arc<str> = Arc::from(s);
-    if let Ok(cp) = path.cast::<CompiledPath>() {
+    if let Ok(cp) = path.cast::<Path>() {
         let borrow = cp.borrow();
         // SAFETY: raw was just validated as valid UTF-8
         let v = unsafe { gjson::get_bytes(raw.as_bytes(), &borrow.path) };
@@ -897,7 +896,7 @@ fn get_bytes(py: Python<'_>, json: &[u8], path: &Bound<'_, PyAny>) -> PyResult<J
 }
 
 /// Get the values at each path in `paths` from the given JSON bytes.
-/// `paths` accepts either a `list[str]` or a `list[CompiledPath]`.
+/// `paths` accepts either a `list[str]` or a `list[Path]`.
 #[pyfunction]
 fn get_many_bytes(py: Python<'_>, json: &[u8], paths: &Bound<'_, PyAny>) -> PyResult<Vec<JsonResult>> {
     let s = std::str::from_utf8(json).map_err(|e| -> PyErr {
@@ -908,7 +907,7 @@ fn get_many_bytes(py: Python<'_>, json: &[u8], paths: &Bound<'_, PyAny>) -> PyRe
     })?;
     let raw: Arc<str> = Arc::from(s);
     let list = paths.cast::<PyList>()?;
-    if !list.is_empty() && list.get_item(0)?.cast::<CompiledPath>().is_ok() {
+    if !list.is_empty() && list.get_item(0)?.cast::<Path>().is_ok() {
         let compiled = get_or_build_compiled(&list);
         // SAFETY: raw was just validated as valid UTF-8
         let vs = unsafe { gjson::get_many_compiled_bytes(raw.as_bytes(), &compiled) };
@@ -922,17 +921,17 @@ fn get_many_bytes(py: Python<'_>, json: &[u8], paths: &Bound<'_, PyAny>) -> PyRe
 }
 
 /// Pre-compile a gjson path string for repeated use.
-/// Pass the returned `CompiledPath` to `get`, `get_bytes`, `get_many`, or
+/// Pass the returned `Path` to `get`, `get_bytes`, `get_many`, or
 /// `get_many_bytes` instead of a plain string to avoid per-call path overhead.
 #[pyfunction]
-fn compile(path: &str) -> CompiledPath {
-    CompiledPath { path: path.to_owned() }
+fn compile(path: &str) -> Path {
+    Path { path: path.to_owned() }
 }
 
 #[pymodule]
 fn _pygjson(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<JsonResult>()?;
-    m.add_class::<CompiledPath>()?;
+    m.add_class::<Path>()?;
     m.add_class::<ValueIterator>()?;
     m.add_class::<KeysView>()?;
     m.add_class::<ValuesView>()?;
