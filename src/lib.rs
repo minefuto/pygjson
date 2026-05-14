@@ -27,7 +27,7 @@ fn get_or_build_compiled(list: &Bound<'_, PyList>) -> Arc<gjson::CompiledPaths> 
     })
 }
 
-/// A pre-compiled gjson path, ready to be passed to `get` / `get_many`.
+/// A pre-compiled gjson path, ready to be passed to `get`, `get_bytes`, `get_many`, or `get_many_bytes`.
 #[pyclass(module = "pygjson._pygjson", name = "Path")]
 pub struct Path {
     path: String,
@@ -44,7 +44,7 @@ impl Path {
 ///
 /// The wrapper holds a reference-counted handle to the raw JSON text together
 /// with the byte range that this particular value occupies inside it. Child
-/// values produced by `get`, iteration, `to_list`, etc. share the same `Arc`
+/// values produced by `get`, iteration, etc. share the same `Arc`
 /// instead of cloning the underlying text, which avoids a fresh heap
 /// allocation per child element.
 #[pyclass(module = "pygjson._pygjson", name = "Result")]
@@ -234,7 +234,8 @@ impl JsonResult {
         self.parsed().f64()
     }
 
-    /// Boolean value. Returns `true` only for the JSON literal `true`.
+    /// Boolean value via gjson's interpretation: `true` for the JSON boolean `true`,
+    /// non-zero for numbers; `false` for all other types (string, null, array, object).
     fn to_bool(&self) -> bool {
         self.parsed().bool()
     }
