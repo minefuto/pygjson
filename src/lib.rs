@@ -10,11 +10,7 @@ thread_local! {
         RefCell::new(HashMap::new());
 }
 
-fn get_or_build_compiled(list: &Bound<'_, PyList>) -> Arc<gjson::CompiledPaths> {
-    let key: Vec<String> = list
-        .iter()
-        .map(|item| item.cast::<Path>().unwrap().borrow().path.clone())
-        .collect();
+fn get_or_build_compiled(key: Vec<String>) -> Arc<gjson::CompiledPaths> {
     TRIE_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
         if let Some(c) = cache.get(&key) {
@@ -25,6 +21,12 @@ fn get_or_build_compiled(list: &Bound<'_, PyList>) -> Arc<gjson::CompiledPaths> 
         cache.insert(key, Arc::clone(&c));
         c
     })
+}
+
+fn key_from_path_list(list: &Bound<'_, PyList>) -> Vec<String> {
+    list.iter()
+        .map(|item| item.cast::<Path>().unwrap().borrow().path.clone())
+        .collect()
 }
 
 /// A pre-compiled gjson path, ready to be passed to `get`, `get_bytes`, `get_many`, or `get_many_bytes`.
@@ -261,18 +263,16 @@ impl JsonResult {
     /// reused across calls with the same compiled path objects.
     fn get_many(&self, paths: &Bound<'_, PyAny>) -> PyResult<Vec<JsonResult>> {
         let list = paths.cast::<PyList>()?;
-        if !list.is_empty() && list.get_item(0)?.cast::<Path>().is_ok() {
-            let compiled = get_or_build_compiled(&list);
-            // SAFETY: raw_slice() is always valid UTF-8 (stored as Arc<str>)
-            let vs = unsafe {
-                gjson::get_many_compiled_bytes(self.raw_slice().as_bytes(), &compiled)
-            };
-            return Ok(vs.into_iter().map(|v| JsonResult::child(&self.raw, v)).collect());
-        }
-        let path_list = list.extract::<Vec<String>>()?;
-        let path_refs: Vec<&str> = path_list.iter().map(String::as_str).collect();
+        let key = if !list.is_empty() && list.get_item(0)?.cast::<Path>().is_ok() {
+            key_from_path_list(&list)
+        } else {
+            list.extract::<Vec<String>>()?
+        };
+        let compiled = get_or_build_compiled(key);
         // SAFETY: raw_slice() is always valid UTF-8 (stored as Arc<str>)
-        let vs = unsafe { gjson::get_many_bytes(self.raw_slice().as_bytes(), &path_refs) };
+        let vs = unsafe {
+            gjson::get_many_compiled_bytes(self.raw_slice().as_bytes(), &compiled)
+        };
         Ok(vs.into_iter().map(|v| JsonResult::child(&self.raw, v)).collect())
     }
 
@@ -860,17 +860,14 @@ fn validate(json: &Bound<'_, PyAny>) -> PyResult<bool> {
 fn get_many(json: &str, paths: &Bound<'_, PyAny>) -> PyResult<Vec<JsonResult>> {
     let raw: Arc<str> = Arc::from(json);
     let list = paths.cast::<PyList>()?;
-    if !list.is_empty() && list.get_item(0)?.cast::<Path>().is_ok() {
-        let compiled = get_or_build_compiled(&list);
-        let vs = gjson::get_many_compiled(&raw, &compiled);
-        return Ok(vs.into_iter().map(|v| JsonResult::child(&raw, v)).collect());
-    }
-    let path_list = list.extract::<Vec<String>>()?;
-    let path_refs: Vec<&str> = path_list.iter().map(String::as_str).collect();
-    Ok(gjson::get_many(&raw, &path_refs)
-        .into_iter()
-        .map(|v| JsonResult::child(&raw, v))
-        .collect())
+    let key = if !list.is_empty() && list.get_item(0)?.cast::<Path>().is_ok() {
+        key_from_path_list(&list)
+    } else {
+        list.extract::<Vec<String>>()?
+    };
+    let compiled = get_or_build_compiled(key);
+    let vs = gjson::get_many_compiled(&raw, &compiled);
+    Ok(vs.into_iter().map(|v| JsonResult::child(&raw, v)).collect())
 }
 
 /// Get the value at `path` from the given JSON bytes.
@@ -908,16 +905,14 @@ fn get_many_bytes(py: Python<'_>, json: &[u8], paths: &Bound<'_, PyAny>) -> PyRe
     })?;
     let raw: Arc<str> = Arc::from(s);
     let list = paths.cast::<PyList>()?;
-    if !list.is_empty() && list.get_item(0)?.cast::<Path>().is_ok() {
-        let compiled = get_or_build_compiled(&list);
-        // SAFETY: raw was just validated as valid UTF-8
-        let vs = unsafe { gjson::get_many_compiled_bytes(raw.as_bytes(), &compiled) };
-        return Ok(vs.into_iter().map(|v| JsonResult::child(&raw, v)).collect());
-    }
-    let path_list = list.extract::<Vec<String>>()?;
-    let path_refs: Vec<&str> = path_list.iter().map(String::as_str).collect();
+    let key = if !list.is_empty() && list.get_item(0)?.cast::<Path>().is_ok() {
+        key_from_path_list(&list)
+    } else {
+        list.extract::<Vec<String>>()?
+    };
+    let compiled = get_or_build_compiled(key);
     // SAFETY: raw was just validated as valid UTF-8
-    let vs = unsafe { gjson::get_many_bytes(raw.as_bytes(), &path_refs) };
+    let vs = unsafe { gjson::get_many_compiled_bytes(raw.as_bytes(), &compiled) };
     Ok(vs.into_iter().map(|v| JsonResult::child(&raw, v)).collect())
 }
 
