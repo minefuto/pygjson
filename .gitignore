@@ -7,4 +7,4 @@ __pycache__/
 dist/
 build/
 .pytest_cache/
-Cargo.lock
+uv.lock
