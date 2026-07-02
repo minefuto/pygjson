@@ -63,6 +63,8 @@ str(pygjson.get(JSON, p))  # 'Tom'  — reuse the compiled path
 
 All query functions (`get`, `get_bytes`, `get_many`, `get_many_bytes`) and `Result.get` / `Result.get_many` accept either a plain `str` or a compiled `Path` as the path argument.
 
+Queries are zero-copy: a `Result` borrows the buffer of the source `str` / `bytes` object (keeping it alive via a reference) instead of copying the document, so holding many `Result`s from the same document costs no extra memory. Queries on documents ≥ 32 KiB release the GIL, so concurrent queries from multiple threads run in parallel.
+
 ### Path
 
 `compile(path)` parses a path string once and returns a `Path` object that can be reused across multiple queries. Pass a `Path` anywhere a path string is accepted.

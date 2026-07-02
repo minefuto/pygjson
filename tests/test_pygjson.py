@@ -645,3 +645,68 @@ def test_compiled_path_cache_correctness():
     del p1
     p2 = compile("age")
     assert int(get_many(JSON, [p2])[0]) == 37
+
+
+def test_result_outlives_source_str():
+    import gc
+
+    def build():
+        return '{"a": {"b": "hello"}, "n": [1, 2, 3]}' + " " * 100
+
+    r = get(build(), "a.b")
+    nums = parse(build()).get("n")
+    gc.collect()
+    assert str(r) == "hello"
+    assert [int(v) for v in nums] == [1, 2, 3]
+
+
+def test_result_outlives_source_bytes():
+    import gc
+
+    r = get_bytes(b'{"a": "zero-copy"}', "a")
+    gc.collect()
+    assert str(r) == "zero-copy"
+
+
+def test_str_subclass_input():
+    class MyStr(str):
+        pass
+
+    assert str(get(MyStr('{"a": 1}'), "a")) == "1"
+    assert int(get_many(MyStr('{"a": 1}'), ["a"])[0]) == 1
+
+
+def test_non_ascii_source():
+    doc = '{"greeting": "こんにちは", "esc": "あ\\nい"}'
+    assert str(get(doc, "greeting")) == "こんにちは"
+    assert str(get(doc, "esc")) == "あ\nい"
+    assert str(get_bytes(doc.encode(), "greeting")) == "こんにちは"
+
+
+def test_get_many_mixed_list_raises_type_error():
+    with pytest.raises(TypeError):
+        get_many(JSON, [compile("name.first"), "age"])
+    with pytest.raises(TypeError):
+        get_many(JSON, ["age", compile("name.first")])
+
+
+def test_concurrent_get_on_shared_large_doc():
+    import threading
+
+    big = '{"items": [' + ",".join(f'{{"i": {i}}}' for i in range(10000)) + '], "tail": "end"}'
+    errors = []
+
+    def worker():
+        try:
+            for _ in range(50):
+                assert str(get(big, "tail")) == "end"
+                assert int(get(big, "items.123.i")) == 123
+        except Exception as e:  # pragma: no cover
+            errors.append(e)
+
+    threads = [threading.Thread(target=worker) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert not errors

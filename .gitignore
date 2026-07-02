@@ -1,4 +1,5 @@
 target/
+.cargo/
 .venv/
 *.so
 __pycache__/

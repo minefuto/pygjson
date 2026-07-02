@@ -9,4 +9,8 @@ crate-type = ["cdylib"]
 
 [dependencies]
 pyo3 = { version = "0.28.3", features = ["extension-module", "abi3-py310", "generate-import-lib"] }
-gjson = { git = "https://github.com/minefuto/gjson.rs", rev="bd582d736db3a7263a209729a4ff3825ea0dabfe" }
+gjson = { git = "https://github.com/minefuto/gjson.rs", rev="ea7065a77a41018be8ffc3f014653b9621a67b83" }
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
